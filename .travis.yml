@@ -20,22 +20,15 @@ before_script:
   - git clone https://github.com/esp8266/Arduino.git esp8266
   - cd esp8266/tools
   - python get.py
-  - cd ..
-  - echo "compiler.cpp.extra_flags=-coverage" > platform.local.txt
   
 
 script:
-  - set -e
-  - export CXX="g++-4.8" CC="gcc-4.8" GCOV="gcov-4.8"
   - cd $TRAVIS_BUILD_DIR
   - source command.sh
   - export PATH="$HOME/arduino_ide:$PATH"
   - arduino --board esp8266com:esp8266:generic --save-prefs
   - arduino --get-pref sketchbook.path
   - build_sketch esp8266/esp8266.ino
-
-after_success:
-  - bash <(curl -s https://codecov.io/bash)
   
 notifications:
   email:
