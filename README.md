@@ -2,12 +2,17 @@
 
 [![Join the chat at https://gitter.im/luc-github/ESP8266](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/luc-github/ESP8266?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 FW for ESP8266 used with 3D printer     
+Development version:   
+Arduino ide 1.6.5 with stable 2.1.0 from ESP8266 : [![Build Status](https://travis-ci.org/luc-github/ESP8266.svg?branch=master)](https://travis-ci.org/luc-github/ESP8266)    
+Stable version:   
+Arduino ide 1.6.5 with stable 2.0.0 from ESP8266, please use https://github.com/luc-github/ESP8266/releases/tag/v0.5.1  
 
-Arduino ide 1.6.5 with stable 2.0.0 from ESP8266 : [![Build Status](https://travis-ci.org/luc-github/ESP8266.svg?branch=master)](https://travis-ci.org/luc-github/ESP8266)    
+Both version seems having instability if compiled/flashed under linux (https://github.com/luc-github/ESP8266/issues/64) - so consider to use windows to compile/flash until core is fixed.    
 
 ##Description      
 Thanks to @disneysw for bringing this module idea    
 Thanks to @lkarlslund for suggestion about independant reset using GPIO2   
+Thanks to all contributors (treepleks,  j0hnlittle , and feedbacks owners)
 
 Have a bridge configurable by web (implemented) and optionally by printer (not yet implemented)  
 Have a front end to know what is the wifi status (implemented) or know what is the print status (not yet implemented) - this part can be optional and removed by compilation directive if no need    
@@ -16,7 +21,8 @@ Should be compatible with reprap printer (Marlin FW/Repetier FW)  as soon as you
 
 Current release listed here: https://github.com/luc-github/ESP8266/wiki
 
-Master may not work unless you use the latest code of https://github.com/esp8266/arduino (https://github.com/esp8266/Arduino#using-git-version-) due to delay between PR integration in staging/stable versions
+Master is using 2.1.0 of https://github.com/esp8266/arduino 
+use http://arduino.esp8266.com/versions/2.1.0/package_esp8266com_index.json in arduino 1.6.5 IDE preferences
 
 If you use an ESP with 512K flash like ESP01 please go here : https://github.com/luc-github/ESP8266/tree/ESP-512K-64KSPIFFS, it is dedicated to low memory device.      
 If you use an ESP with more than 512K flash please use master.      
@@ -36,8 +42,8 @@ For Davinci Board:<BR>
 
 ##Development   
 Currently using [Arduino IDE 1.6.5](http://arduino.cc/en/Main/Software)  with the esp8266 module from board manager added from [github.com/esp8266/Arduino](https://github.com/esp8266/Arduino)    
-using relased version (http://arduino.esp8266.com/package_esp8266com_index.json)     
-and staging version (http://arduino.esp8266.com/staging/package_esp8266com_index.json)     
+please use 2.1.0 relased version (http://arduino.esp8266.com/versions/2.1.0/package_esp8266com_index.json)     
+staging version (http://arduino.esp8266.com/staging/package_esp8266com_index.json) is not yet stable neither compatible with current master please check dev branch https://github.com/luc-github/ESP8266/tree/devt  
   
 Additionnaly:   
 --Use minimal css from http://getbootstrap.com/examples/theme/  
@@ -45,7 +51,7 @@ Additionnaly:
 ##Flash the Module    
 *Tools:      
 --Use IDE to upload directly  (latest version of board manager module generate one binary)     
--- to flash the htm files present in data directory you need to use another tool, installation and usage is explained here:  http://arduino.esp8266.com/versions/1.6.5-1160-gef26c5f/doc/reference.html#file-system   
+-- to flash the htm files present in data directory you need to use another tool, installation and usage is explained here:  https://github.com/esp8266/Arduino/blob/master/doc/filesystem.md     
 Once flashed you also can use the web updater to flash new FW in System Configuration Page
 
 *Connection
@@ -110,6 +116,10 @@ So UI is kind of separated from FW which allow easier modifications. For this a 
 Additionally 404.tpl (the page not found) and restart.tpl(restart page when applying changes) are not mandatory, a fail safe version is embeded if they are not present.     
 
 Currently, I tested on ESP01 using 64K SPIFFS ( please use data directory content accordingly due to space limitation) and NodeMCU 1.0 1M SPIFFS.     
+##Modifying and Testing tpl files
+To help to visualize tpl modifications a local tool has been created by [j0hnlittle](https://github.com/j0hnlittle) to avoid to upload everytime your tpl files just to see the results of your modifications   
+It is a python script (2.7+) located in tools directory, launch it: python server.py, then open browser: http://localhost:8080   
+It will display the web ui and allow some navigation
 
 ##Protocol for discovery   
 *mDNS : on Station mode only with bonjour installed on computer (done)  

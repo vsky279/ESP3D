@@ -20,8 +20,8 @@
 
 //comment to disable
 //MDNS_FEATURE: this feature allow  type the name defined
-//in web browser by default: http:\\esp8266.local and connect 
-#define MDNS_FEATURE
+//in web browser by default: http:\\esp8266.local and connect
+//#define MDNS_FEATURE
 
 //SSDD_FEATURE: this feature is a discovery protocol, supported on Windows out of the box
 #define SSDP_FEATURE
@@ -32,16 +32,22 @@
 //AUTHENTICATION_FEATURE: protect pages by login password
 #define AUTHENTICATION_FEATURE
 
+//WEB_UPDATE_FEATURE: allow to flash fw using web UI
+#define WEB_UPDATE_FEATURE
+
+//SERIAL_COMMAND_FEATURE: allow to send command by serial
+#define SERIAL_COMMAND_FEATURE
+
+//TCP_IP_DATA_FEATURE: allow to connect serial from TCP/IP
+#define TCP_IP_DATA_FEATURE
+
 #ifndef CONFIG_h
 #define CONFIG_h
 
 #include <Arduino.h>
 #include "wifi.h"
-extern "C" {
-#include "user_interface.h"
-}
 //version and sources location
-#define FW_VERSION "0.5.1"
+#define FW_VERSION "0.6.0"
 #define REPOSITORY "https://github.com/luc-github/ESP8266"
 
 
@@ -90,8 +96,8 @@ const byte DEFAULT_MASK_VALUE[]  =	        {255, 255, 255, 0};
 #define DEFAULT_GATEWAY_VALUE   	        DEFAULT_IP_VALUE
 const long DEFAULT_BAUD_RATE =			9600;
 const char M117_[] PROGMEM =		"M117 ";
-#define DEFAULT_PHY_MODE			PHY_MODE_11G
-#define DEFAULT_SLEEP_MODE			MODEM_SLEEP_T
+#define DEFAULT_PHY_MODE			WIFI_PHY_MODE_11G
+#define DEFAULT_SLEEP_MODE			WIFI_MODEM_SLEEP
 #define DEFAULT_CHANNEL				11
 #define DEFAULT_AUTH_TYPE			AUTH_WPA_PSK
 #define DEFAULT_SSID_VISIBLE			1
@@ -119,7 +125,7 @@ const char DEFAULT_ADMIN []  PROGMEM =	"admin";
 
 class CONFIG
 {
-  public:
+public:
     static bool read_string(int pos, char byte_buffer[], int size_max);
     static bool read_string(int pos, String & sbuffer, int size_max);
     static bool read_buffer(int pos, byte byte_buffer[], int size_buffer);
