@@ -445,4 +445,16 @@ void CONFIG::print_config()
 #else
     Serial.println(F("Disabled"));
 #endif
+    Serial.print(F("Pin 2 Recovery: "));
+#ifdef RECOVERY_FEATURE
+    Serial.println(F("Enabled"));
+#else
+    Serial.println(F("Disabled"));
+#endif
+    Serial.print(F("Authentication: "));
+#ifdef AUTHENTICATION_FEATURE
+    Serial.println(F("Enabled"));
+#else
+    Serial.println(F("Disabled"));
+#endif
 }

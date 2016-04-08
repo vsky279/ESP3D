@@ -58,13 +58,15 @@ void setup()
     data_server = NULL;
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
-    delay(8000);
     bool breset_config=false;
+#ifdef RECOVERY_FEATURE
+    delay(8000);
     //check if reset config is requested
     pinMode(RESET_CONFIG_PIN, INPUT);
     if (digitalRead(RESET_CONFIG_PIN)==0) {
         breset_config=true;    //if requested =>reset settings
     }
+#endif
     //default baud rate
     long baud_rate=0;
 

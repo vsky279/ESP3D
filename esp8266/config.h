@@ -41,6 +41,9 @@
 //TCP_IP_DATA_FEATURE: allow to connect serial from TCP/IP
 #define TCP_IP_DATA_FEATURE
 
+//RECOVERY_FEATURE: allow to use GPIO2 pin as hardware reset for EEPROM, add 8s to boot time to let user to jump GPIO2 to GND
+#define RECOVERY_FEATURE
+
 #ifndef CONFIG_h
 #define CONFIG_h
 
