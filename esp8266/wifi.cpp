@@ -64,8 +64,9 @@ const char * WIFI_CONFIG::get_default_hostname()
     return hostname;
 }
 
-//no strtok so this is simplified version
-//return number of part
+//helper to convert string to IP
+//do not use IPAddress.fromString() because lack of check point and error result 
+//return number of parts
 byte WIFI_CONFIG::split_ip (const char * ptr,byte * part)
 {
     if (strlen(ptr)>15 || strlen(ptr)< 7) {
@@ -111,16 +112,7 @@ char * WIFI_CONFIG::mac2str(uint8_t mac [WL_MAC_ADDR_LENGTH])
     return macstr;
 }
 
-//just simple helper to convert IP address to string
-char * WIFI_CONFIG::ip2str(IPAddress Ip )
-{
-    static char ipstr [16];
-    if (0>sprintf(ipstr, "%i.%i.%i.%i",Ip[0],Ip[1],Ip[2],Ip[3])) {
-        strcpy (ipstr, "0.0.0.0");
-    }
-    return ipstr;
-}
-
+//safe setup if no connection 
 void  WIFI_CONFIG::Safe_Setup()
 {
 #ifdef CAPTIVE_PORTAL_FEATURE
@@ -200,15 +192,6 @@ bool WIFI_CONFIG::Setup()
 		WiFi.enableSTA(true);
         //setup Soft AP
         WiFi.mode(WIFI_AP);
-       /*  if (!CONFIG::read_byte(EP_SSID_VISIBLE, &bflag )) {
-            return false;
-        }
-        byte ishidden = (bflag==0)?1:0;
-        //set the chanel
-        if (!CONFIG::read_byte(EP_CHANNEL, &bflag )) {
-            return false;
-        }
-        WiFi.softAP(sbuf, pwd,bflag,ishidden);*/
         WiFi.softAP(sbuf, pwd);
         //setup PHY_MODE
         if (!CONFIG::read_byte(EP_PHY_MODE, &bflag )) {

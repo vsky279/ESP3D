@@ -533,8 +533,6 @@ bool processTemplate(const char  * filename, STORESTRINGS_CLASS & KeysList ,  ST
             bufferheader.concat(F("\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n"));
         }
     }
-    Serial.print(filename);
-    Serial.print("\n");
     return true;
 }
 // -----------------------------------------------------------------------------
@@ -709,9 +707,6 @@ void handle_web_interface_root()
 {
 	static const char HOME_PAGE [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /HOME\r\nCache-Control: no-cache\r\n\r\n";
 	web_interface->WebServer.sendContent_P(HOME_PAGE);
-	//String buffer2send = "Yes";
-	//web_interface->WebServer.send(200,"text/plain",buffer2send);
-	Serial.print("/\n");
 }
 
 //root insterface
@@ -1553,9 +1548,9 @@ void handle_web_interface_configAP()
 
         //Subnet for static IP
         if (!CONFIG::read_buffer(EP_MASK_VALUE,msk_sav , IP_LENGTH) ) {
-            sMask=wifi_config.ip2str((byte *)DEFAULT_MASK_VALUE);
+            sMask=IPAddress((const uint8_t *)DEFAULT_MASK_VALUE).toString();
         } else {
-            sMask=wifi_config.ip2str(msk_sav);
+            sMask=IPAddress((const uint8_t *)msk_sav).toString();
         }
     }
 
@@ -1854,21 +1849,21 @@ void handle_web_interface_configSTA()
         }
         //IP for static IP
         if (!CONFIG::read_buffer(EP_IP_VALUE,ip_sav , IP_LENGTH) ) {
-            sIP=wifi_config.ip2str((byte *)DEFAULT_IP_VALUE);
+            sIP=IPAddress((const uint8_t *)DEFAULT_IP_VALUE).toString();
         } else {
-            sIP=wifi_config.ip2str(ip_sav);
+            sIP=IPAddress((const uint8_t *)ip_sav).toString();
         }
         //GW for static IP
         if (!CONFIG::read_buffer(EP_GATEWAY_VALUE,gw_sav , IP_LENGTH) ) {
-            sGW=wifi_config.ip2str((byte *)DEFAULT_GATEWAY_VALUE);
+            sGW=IPAddress((const uint8_t *)DEFAULT_GATEWAY_VALUE).toString();
         } else {
-            sGW=wifi_config.ip2str(gw_sav);
+            sGW=IPAddress((const uint8_t *)gw_sav).toString();
         }
         //Subnet for static IP
         if (!CONFIG::read_buffer(EP_MASK_VALUE,msk_sav , IP_LENGTH) ) {
-            sMask=wifi_config.ip2str((byte *)DEFAULT_MASK_VALUE);
+            sMask=IPAddress((const uint8_t *)DEFAULT_MASK_VALUE).toString();
         } else {
-            sMask=wifi_config.ip2str(msk_sav);
+            sMask=IPAddress((const uint8_t *)msk_sav).toString();
         }
     }
     //Display values

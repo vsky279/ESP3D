@@ -258,7 +258,6 @@ void CONFIG::print_config()
     } else {
         Serial.println(F("Error reading SSID"));
     }
-    //if (CONFIG::read_string(EP_PASSWORD, sbuf , MAX_PASSWORD_LENGTH))Serial.println(sbuf);
 
     if (CONFIG::read_byte(EP_IP_MODE, &bbuf )) {
         Serial.print(F("IP Mode: "));
