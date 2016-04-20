@@ -17,10 +17,14 @@ before_script:
   - cd $HOME/arduino_ide/hardware
   - mkdir esp8266com
   - cd esp8266com
-  - git clone https://github.com/esp8266/Arduino.git esp8266
+  - wget https://github.com/esp8266/Arduino/releases/download/2.2.0/esp8266-2.2.0.zip
+  - unzip esp8266-2.2.0.zip
+  - mv esp8266-2.2.0 esp8266
+  - wget http://arduino.esp8266.com/versions/2.2.0/package_esp8266com_index.json
+  - mkdir esp8266/package
+  - mv package_esp8266com_index.json esp8266/package/package_esp8266com_index.template.json
   - cd esp8266/tools
   - python get.py
-  
 
 script:
   - cd $TRAVIS_BUILD_DIR
