@@ -1,5 +1,5 @@
 /*
-  webinterface.cpp - esp8266 configuration class
+  webinterface.cpp - ESP3D configuration class
 
   Copyright (c) 2014 Luc Lebosse. All rights reserved.
 
@@ -30,6 +30,7 @@
 #include "LinkedList.h"
 #include "storestrings.h"
 #include "command.h"
+#include "bridge.h"
 
 #ifdef SSDP_FEATURE
 #include <ESP8266SSDP.h>
@@ -3056,6 +3057,106 @@ void handleSDFileList()
     web_interface->blockserial = false;
 }
 
+#define MAX_TRY 2000
+size_t filesize(const char * path, bool & found, String & contentType){
+    String dir_path = path;
+    size_t fsize = 0;
+    String  filename ;
+    String tmp;
+    String cmd = F("ls -s ") ; 
+    int pos;
+    //smoothie only handle lowercase
+    dir_path.toLowerCase();
+    dir_path.trim();
+    found = false;
+    bool save_lock = web_interface->blockserial;
+     //block all query
+    web_interface->blockserial = true;
+    pos =  dir_path.lastIndexOf("/");
+    //if pos is not after /sd it means no file , same if just /sd/
+    //so add index.html as default file
+    if ((dir_path.length() == pos+1) || (pos ==0)){
+        if (pos ==0) {
+            dir_path = dir_path + "/";
+            pos = dir_path.length()-1;
+            }
+        dir_path = dir_path + "index.html";
+        //file changed so type also
+        contentType = "text/html";
+    }
+    //start the char after the last "/"
+    pos++;
+    //get path and filename
+    filename = dir_path.substring(pos,dir_path.length());
+    tmp = dir_path;
+    dir_path = tmp.substring(0,pos-1);
+    //empty the serial buffer and incoming data
+    while(Serial.available()){
+        BRIDGE::processFromSerial2TCP();
+        delay(0);
+        }
+    //send list directory command
+    cmd += dir_path;
+    Serial.println(cmd);
+     //wait for answer
+    int count = 0;
+    while(!Serial.available() && count < 1000){
+         delay(1);
+         count++;
+     }
+     //no feedback - may be no connection ?
+    if (!Serial.available() ) return 0;
+     count = 0;
+     String current_buffer;
+     String current_line;
+     filename += " ";
+     //pickup the list
+     while (count < MAX_TRY){
+         //give some time between each buffer
+         if (Serial.available()){
+             count = 0;
+            size_t len = Serial.available();
+             uint8_t sbuf[len+1];
+            //read buffer
+            Serial.readBytes(sbuf, len);
+            //change buffer as string
+            sbuf[len]='\0';
+            //add buffer to current one if any
+            current_buffer += (char * ) sbuf;
+            while (current_buffer.indexOf("\n") !=-1){
+                //remove the possible "\r"
+                current_buffer.replace("\r","");
+                pos = current_buffer.indexOf("\n");
+                //get line
+                current_line = current_buffer.substring(0,current_buffer.indexOf("\n"));
+               //if line is command acck - just exit so save the time out period
+                if ((current_line.indexOf("ok" ) == 0) &&  (current_line.length() == 2))
+                    { 
+                        count = MAX_TRY;
+                        break;
+                    } 
+                //check if filename + space is there 
+                if ((current_line.indexOf(filename ) == 0) ){
+                    //extract the size
+                    tmp = current_line.substring(filename.length(), current_line.length());
+                    //we found it
+                    found = true;
+                    //save the size
+                    fsize = (size_t )tmp.toInt();
+                    //now let clean the buffer until the end as need to purge anyway
+                }
+                //current remove line from buffer
+                tmp = current_buffer.substring(current_buffer.indexOf("\n")+1,current_buffer.length());
+                current_buffer = tmp;
+            }
+         } else delay(1);
+         count++;
+     }
+    //restore status
+    web_interface->blockserial = save_lock; 
+    //send result  
+    return fsize;  
+}
 //do a redirect to avoid to many query
 //and handle not registred path
 void handle_not_found()
@@ -3076,6 +3177,62 @@ void handle_not_found()
     LOG("type:")
     LOG(contentType)
     LOG("\n")
+   
+    
+#if FIRMWARE_TARGET == SMOOTHIEWARE
+    LOG(path.substring(0,3) )
+    LOG("\n")
+    if (path.substring(0,4) == "/sd/")
+        { 
+            bool file_found;
+            LOG("SD file request\n")
+            //block all query
+            web_interface->blockserial = true;
+            //get file size and if exist
+            size_t fsize = filesize(path.c_str(),file_found,contentType);
+            if (!file_found) page_not_found = true;
+            else{ //got size and file exist
+                    //empty the serial buffer and incoming data
+                    while(Serial.available()){
+                        BRIDGE::processFromSerial2TCP();
+                        delay(0);
+                        } 
+                    //send the command 
+                    String cmd = "cat " + path;
+                    Serial.println(cmd);
+                    //wait for answer
+                    int count = 0;
+                    while(!Serial.available() && count < 1000){
+                        delay(1);
+                        count++;
+                    }
+                    //send size
+                    web_interface->WebServer.setContentLength(fsize);
+                    //send content type
+                    web_interface->WebServer.send(200,contentType,"");
+                    size_t i = 0; 
+                    //init time out
+                    uint32_t last_time  = millis(); 
+                    while( i < fsize ){
+                        if (Serial.available()){
+                            size_t len = Serial.available();
+                            uint8_t sbuf[len];
+                            //reset time out
+                            last_time  = millis(); 
+                            //read buffer
+                            Serial.readBytes(sbuf, len);
+                           web_interface->WebServer.client().write(sbuf, len);
+                           i += len;
+                        }
+                       else {//time out = 2000 ms without answer so we exit to avoid dead loop
+                           if (( millis() - last_time)>2000) break;
+                       }
+                    }//end while i < fsize
+                }
+            web_interface->blockserial = false;
+        }
+    else
+#endif
     if(SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) {
         if(SPIFFS.exists(pathWithGz)) {
             path = pathWithGz;
@@ -3087,7 +3244,8 @@ void handle_not_found()
     } else page_not_found = true;
     
     if (page_not_found )
-     {
+     { 
+         LOG("Page not found it \n")
         if (SPIFFS.exists("/404.tpl")) {
             STORESTRINGS_CLASS KeysList ;
             STORESTRINGS_CLASS ValuesList ;
