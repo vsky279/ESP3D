@@ -3199,6 +3199,10 @@ void handle_not_found()
                         BRIDGE::processFromSerial2TCP();
                         delay(0);
                         } 
+                    //send size
+                    web_interface->WebServer.setContentLength(fsize);
+                    //send content type
+                    web_interface->WebServer.send(200,contentType,"");
                     //send the command 
                     String cmd = "cat " + path;
                     Serial.println(cmd);
@@ -3208,10 +3212,6 @@ void handle_not_found()
                         delay(1);
                         count++;
                     }
-                    //send size
-                    web_interface->WebServer.setContentLength(fsize);
-                    //send content type
-                    web_interface->WebServer.send(200,contentType,"");
                     size_t i = 0; 
                     //init time out
                     uint32_t last_time  = millis(); 
@@ -3229,6 +3229,7 @@ void handle_not_found()
                        else {//time out = 2000 ms without answer so we exit to avoid dead loop
                            if (( millis() - last_time)>2000) break;
                        }
+                    delay(0);
                     }//end while i < fsize
                 }
             web_interface->blockserial = false;
@@ -3696,7 +3697,10 @@ String WEBINTERFACE_CLASS::getContentType(String filename)
         return "image/png";
     } else if(filename.endsWith(".gif")) {
         return "image/gif";
-    } else if(filename.endsWith(".jpg")) {
+    } else if(filename.endsWith(".jpeg")) {
+        return "image/jpeg";
+    } 
+    else if(filename.endsWith(".jpg")) {
         return "image/jpeg";
     } else if(filename.endsWith(".ico")) {
         return "image/x-icon";
