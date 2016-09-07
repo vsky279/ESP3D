@@ -3058,7 +3058,7 @@ void handleSDFileList()
 }
 
 #define MAX_TRY 2000
-size_t filesize(const char * path, bool & found, String & contentType){
+size_t filesize(String & path, bool & found, String & contentType){
     String dir_path = path;
     size_t fsize = 0;
     String  filename ;
@@ -3081,6 +3081,8 @@ size_t filesize(const char * path, bool & found, String & contentType){
             pos = dir_path.length()-1;
             }
         dir_path = dir_path + "index.html";
+        //fix the path 
+        path = dir_path;
         //file changed so type also
         contentType = "text/html";
     }
@@ -3189,7 +3191,7 @@ void handle_not_found()
             //block all query
             web_interface->blockserial = true;
             //get file size and if exist
-            size_t fsize = filesize(path.c_str(),file_found,contentType);
+            size_t fsize = filesize(path,file_found,contentType);
             if (!file_found) page_not_found = true;
             else{ //got size and file exist
                     //empty the serial buffer and incoming data
