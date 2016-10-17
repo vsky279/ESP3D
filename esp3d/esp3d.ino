@@ -1,12 +1,12 @@
 /*
-    This file is part of ESP8266 Firmware for 3D printer.
+    This file is part of ESP3D Firmware for 3D printer.
 
-    ESP8266 Firmware for 3D printer is free software: you can redistribute it and/or modify
+    ESP3D Firmware for 3D printer is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
-    ESP8266 Firmware for 3D printer is distributed in the hope that it will be useful,
+    ESP3D Firmware for 3D printer is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
@@ -18,7 +18,7 @@
     https://github.com/esp8266/Arduino from Bootmanager
 
     Latest version of the code and documentation can be found here :
-    https://github.com/luc-github/ESP8266
+    https://github.com/luc-github/ESP3D
 
     Main author: luc lebosse
 
@@ -30,6 +30,7 @@
 #include <EEPROM.h>
 #include "config.h"
 #include "wifi.h"
+#include "bridge.h"
 #include "webinterface.h"
 #include "command.h"
 #include <ESP8266WiFi.h>
@@ -46,19 +47,26 @@ DNSServer dnsServer;
 #ifdef SSDP_FEATURE
 #include <ESP8266SSDP.h>
 #endif
-#include <FS.h>
-#define MAX_SRV_CLIENTS 1
-WiFiServer * data_server;
-WiFiClient serverClients[MAX_SRV_CLIENTS];
+#ifdef NETBIOS_FEATURE
+#include <ESP8266NetBIOS.h>
+#endif
 
 void setup()
 {
-    // init:
-    web_interface = NULL;
-    data_server = NULL;
-    WiFi.disconnect();
-    WiFi.mode(WIFI_OFF);
     bool breset_config=false;
+    long baud_rate=0;
+    web_interface = NULL;
+#ifdef TCP_IP_DATA_FEATURE
+    data_server = NULL;
+#endif
+    // init:
+#ifdef DEBUG_ESP3D
+    Serial.begin(DEFAULT_BAUD_RATE);
+    delay(2000);
+    LOG("\nDebug Serial set\n")
+#endif
+    //WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
 #ifdef RECOVERY_FEATURE
     delay(8000);
     //check if reset config is requested
@@ -67,52 +75,61 @@ void setup()
         breset_config=true;    //if requested =>reset settings
     }
 #endif
-    //default baud rate
-    long baud_rate=0;
-
     //check if EEPROM has value
     if ( CONFIG::read_buffer(EP_BAUD_RATE,  (byte *)&baud_rate , INTEGER_LENGTH)&&CONFIG::read_buffer(EP_WEB_PORT,  (byte *)&(wifi_config.iweb_port) , INTEGER_LENGTH)&&CONFIG::read_buffer(EP_DATA_PORT,  (byte *)&(wifi_config.idata_port) , INTEGER_LENGTH)) {
         //check if baud value is one of allowed ones
         if ( ! (baud_rate==9600 || baud_rate==19200 ||baud_rate==38400 ||baud_rate==57600 ||baud_rate==115200 ||baud_rate==230400 ||baud_rate==250000) ) {
+            LOG("Error for EEPROM baud rate\n")
             breset_config=true;    //baud rate is incorrect =>reset settings
         }
         if (wifi_config.iweb_port<1 ||wifi_config.iweb_port>65001 || wifi_config.idata_port <1 || wifi_config.idata_port >65001) {
             breset_config=true;    //out of range =>reset settings
+            LOG("Error for EEPROM port values\n")
         }
 
     } else {
         breset_config=true;    //cannot access to config settings=> reset settings
+        LOG("Error no EEPROM access\n")
     }
-
 
     //reset is requested
     if(breset_config) {
         //update EEPROM with default settings
-        Serial.begin(9600);
+        Serial.begin(DEFAULT_BAUD_RATE);
         delay(2000);
         Serial.println(F("M117 ESP EEPROM reset"));
+#ifdef DEBUG_ESP3D
+        CONFIG::print_config();
+        delay(1000);
+#endif
         CONFIG::reset_config();
         delay(1000);
         //put some default value to a void some exception at first start
         WiFi.mode(WIFI_AP);
         WiFi.setPhyMode(WIFI_PHY_MODE_11G);
-        Serial.flush();
-        delay(500);
-        Serial.swap();
-        delay(100);
-        //restart once reset config is done
-        ESP.restart();
-        while (1) {
-            delay(1);
-        };
+        CONFIG::esp_restart();
     }
+#if defined(DEBUG_ESP3D) && defined(DEBUG_OUTPUT_SERIAL)
+    LOG("\n");
+    delay(500);
+    Serial.flush();
+#endif
     //setup serial
     Serial.begin(baud_rate);
     delay(1000);
+    LOG("Serial Set\n");
     wifi_config.baud_rate=baud_rate;
+    //Update is done if any so should be Ok
+    SPIFFS.begin();
+
     //setup wifi according settings
     if (!wifi_config.Setup()) {
-        wifi_config.Safe_Setup();
+        Serial.println(F("M117 Safe mode 1"));
+        //try again in AP mode
+        if (!wifi_config.Setup(true)) {
+            Serial.println(F("M117 Safe mode 2"));
+            wifi_config.Safe_Setup();
+        }
     }
     delay(1000);
     //start web interface
@@ -134,22 +151,24 @@ void setup()
     //start TCP/IP interface
     data_server = new WiFiServer (wifi_config.idata_port);
     data_server->begin();
-    //data_server->setNoDelay(true);
+    data_server->setNoDelay(true);
 #endif
 
 #ifdef MDNS_FEATURE
     // Check for any mDNS queries and send responses
     wifi_config.mdns.addService("http", "tcp", wifi_config.iweb_port);
 #endif
-
+#if defined(SSDP_FEATURE) || defined(NETBIOS_FEATURE)
+    String shost;
+    if (!CONFIG::read_string(EP_HOSTNAME, shost , MAX_HOSTNAME_LENGTH)) {
+        shost=wifi_config.get_default_hostname();
+    }
+#endif
 #ifdef SSDP_FEATURE
     String stmp;
     SSDP.setSchemaURL("description.xml");
     SSDP.setHTTPPort( wifi_config.iweb_port);
-    if (!CONFIG::read_string(EP_HOSTNAME, stmp , MAX_HOSTNAME_LENGTH)) {
-        stmp=wifi_config.get_default_hostname();
-    }
-    SSDP.setName(stmp.c_str());
+    SSDP.setName(shost.c_str());
     stmp=String(ESP.getChipId());
     SSDP.setSerialNumber(stmp.c_str());
     SSDP.setURL("/");
@@ -158,9 +177,13 @@ void setup()
     SSDP.setModelURL("http://espressif.com/en/products/esp8266/");
     SSDP.setManufacturer("Espressif Systems");
     SSDP.setManufacturerURL("http://espressif.com");
+    SSDP.setDeviceType("upnp:rootdevice");
     SSDP.begin();
 #endif
-    SPIFFS.begin();
+#ifdef NETBIOS_FEATURE
+    NBNS.begin(shost.c_str());
+#endif
+    LOG("Setup Done\n");
 }
 
 
@@ -174,65 +197,11 @@ void loop()
 #endif
 //web requests
     web_interface->WebServer.handleClient();
-
-//TODO use a method to handle serial also in class and call it instead of this one
-    uint8_t i,data;
 #ifdef TCP_IP_DATA_FEATURE
-    //check if there are any new clients
-    if (data_server->hasClient()) {
-        for(i = 0; i < MAX_SRV_CLIENTS; i++) {
-            //find free/disconnected spot
-            if (!serverClients[i] || !serverClients[i].connected()) {
-                if(serverClients[i]) {
-                    serverClients[i].stop();
-                }
-                serverClients[i] = data_server->available();
-                continue;
-            }
-        }
-        //no free/disconnected spot so reject
-        WiFiClient serverClient = data_server->available();
-        serverClient.stop();
-    }
-    //check clients for data
-    for(i = 0; i < MAX_SRV_CLIENTS; i++) {
-        if (serverClients[i] && serverClients[i].connected()) {
-            if(serverClients[i].available()) {
-                //get data from the tcp client and push it to the UART
-                while(serverClients[i].available()) {
-                    data = serverClients[i].read();
-                    Serial.write(data);
-                    COMMAND::read_buffer_tcp(data);
-                }
-            }
-        }
-    }
+    BRIDGE::processFromTCP2Serial();
 #endif
-    //check UART for data
-    if(Serial.available()) {
-        size_t len = Serial.available();
-        uint8_t sbuf[len];
-        Serial.readBytes(sbuf, len);
-#ifdef TCP_IP_DATA_FEATURE
-        //push UART data to all connected tcp clients
-        for(i = 0; i < MAX_SRV_CLIENTS; i++) {
-            if (serverClients[i] && serverClients[i].connected()) {
-                serverClients[i].write(sbuf, len);
-                delay(1);
-            }
-        }
-#endif
-        //process data if any
-        COMMAND::read_buffer_serial(sbuf, len);
-    }
+    BRIDGE::processFromSerial2TCP();
     if (web_interface->restartmodule) {
-        Serial.flush();
-        delay(500);
-        Serial.swap();
-        delay(100);
-        ESP.restart();
-        while (1) {
-            delay(1);
-        };
+        CONFIG::esp_restart();
     }
 }

@@ -8,7 +8,7 @@ import json
 import re
 
 #Replace this with a different path if you need to...
-base_path = os.path.join(os.getcwd(),"..","esp8266","data")
+base_path = os.path.join(os.getcwd(),"..","esp3d","data")
 tools_path = os.getcwd();
 server_port=8080
 
@@ -39,9 +39,9 @@ class MyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         s = s.lower()+".tpl"
 
         #these do not exactly match, so let's make them!
-        s = s.replace("configsta","config_sta") 
-        s = s.replace("configap","config_ap") 
-        s = s.replace("configsys","system") 
+        s = s.replace("configsta","config_sta")
+        s = s.replace("configap","config_ap")
+        s = s.replace("configsys","system")
 
         if os.path.exists(os.path.join(base_path,s)):
             ret = True,s
@@ -96,7 +96,7 @@ if __name__ == '__main__':
     print "\ntags.json is located at:"
     print tools_path
     print "\nOpen your browser at http://localhost:" + str(server_port)
-    
+
     os.chdir(base_path)
     print "="*60
     handler = MyHandler

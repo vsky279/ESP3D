@@ -1,5 +1,5 @@
 /*
-  webinterface.cpp - esp8266 configuration class
+  webinterface.cpp - ESP3D configuration class
 
   Copyright (c) 2014 Luc Lebosse. All rights reserved.
 
@@ -27,24 +27,24 @@
 #include <WiFiUdp.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
-extern "C" {
-#include "user_interface.h"
-}
-#include <FS.h>
 #include "LinkedList.h"
 #include "storestrings.h"
 #include "command.h"
+#include "bridge.h"
 
 #ifdef SSDP_FEATURE
 #include <ESP8266SSDP.h>
 #endif
 
 #define MAX_AUTH_IP 10
-#define UPLOAD_STATUS_NONE	0
-#define UPLOAD_STATUS_FAILED 1
-#define UPLOAD_STATUS_CANCELLED 2
-#define UPLOAD_STATUS_SUCCESSFUL 3
-#define UPLOAD_STATUS_ONGOING 4
+
+typedef enum {
+    UPLOAD_STATUS_NONE = 0,
+    UPLOAD_STATUS_FAILED = 1,
+    UPLOAD_STATUS_CANCELLED = 2,
+    UPLOAD_STATUS_SUCCESSFUL = 3,
+    UPLOAD_STATUS_ONGOING  =4
+} upload_status_type;
 
 const char PAGE_404 [] PROGMEM ="<HTML>\n<HEAD>\n<title>Redirecting...</title> \n</HEAD>\n<BODY>\n<CENTER>Unknown page - you will be redirected...\n<BR><BR>\nif not redirected, <a href='http://$WEB_ADDRESS$'>click here</a>\n<BR><BR>\n<PROGRESS name='prg' id='prg'></PROGRESS>\n\n<script>\nvar i = 0; \nvar x = document.getElementById(\"prg\"); \nx.max=5; \nvar interval=setInterval(function(){\ni=i+1; \nvar x = document.getElementById(\"prg\"); \nx.value=i; \nif (i>5) \n{\nclearInterval(interval);\nwindow.location.href='/';\n}\n},1000);\n</script>\n</CENTER>\n</BODY>\n</HTML>\n\n";
 const char PAGE_RESTART [] PROGMEM ="<HTML>\n<HEAD>\n<title>Restarting...</title> \n</HEAD>\n<BODY>\n<CENTER>Restarting, please wait....\n<BR>\n<PROGRESS name='prg' id='prg'></PROGRESS>\n</CENTER>\n<script>\nvar i = 0;\nvar interval; \nvar x = document.getElementById(\"prg\"); \nx.max=40; \ninterval = setInterval(function(){\ni=i+1; \nvar x = document.getElementById(\"prg\"); \nx.value=i; \nif (i>40) \n{\nclearInterval(interval);\nwindow.location.href='/';\n}\n},1000);\n</script>\n</BODY>\n</HTML>\n";
@@ -207,355 +207,239 @@ const char EEPROM_NOWRITE [] PROGMEM = "Error: Cannot write to EEPROM";
 const char KEY_WEB_UPDATE [] PROGMEM = "$WEB_UPDATE_VISIBILITY$";
 const char KEY_STA_SIGNAL [] PROGMEM = "$STA_SIGNAL$";
 const char KEY_DATA_PORT_VISIBILITY [] PROGMEM = "$DATA_PORT_VISIBILITY$";
+const char KEY_LOGIN_ID [] PROGMEM = "$LOGIN_ID$";
+const char KEY_IS_DEFAULT_MODE [] PROGMEM = "$IS_DEFAULT_MODE$";
 
-bool WEBINTERFACE_CLASS::isHostnameValid(const char * hostname)
-{
-    //limited size
-    char c;
-    if (strlen(hostname)>MAX_HOSTNAME_LENGTH || strlen(hostname) < 1) {
-        return false;
-    }
-    //only letter and digit
-    for (int i=0; i < strlen(hostname); i++) {
-        c = hostname[i];
-        if (!(isdigit(c) || isalpha(c) || c=='_')) {
-            return false;
-        }
-        if (c==' ') {
-            return false;
-        }
-    }
-    return true;
-}
 
-bool WEBINTERFACE_CLASS::isSSIDValid(const char * ssid)
-{
-    //limited size
-    char c;
-    if (strlen(ssid)>MAX_SSID_LENGTH || strlen(ssid)<MIN_SSID_LENGTH) {
-        return false;
-    }
-    //only letter and digit
-    for (int i=0; i < strlen(ssid); i++) {
-        c = ssid[i];
-        //if (!(isdigit(c) || isalpha(c))) return false;
-        if (c==' ') {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool WEBINTERFACE_CLASS::isPasswordValid(const char * password)
-{
-    //limited size
-    if ((strlen(password)>MAX_PASSWORD_LENGTH)||  (strlen(password)<MIN_PASSWORD_LENGTH)) {
-        return false;
-    }
-    //no space allowed
-    for (int i=0; i < strlen(password); i++)
-        if (password[i] == ' ') {
-            return false;
-        }
-
-    return true;
-}
-
-bool WEBINTERFACE_CLASS::isAdminPasswordValid(const char * password)
-{
-    char c;
-    //limited size
-    if ((strlen(password)>MAX_ADMIN_PASSWORD_LENGTH)||  (strlen(password)<MIN_ADMIN_PASSWORD_LENGTH)) {
-        return false;
-    }
-    //no space allowed
-    for (int i=0; i < strlen(password); i++) {
-        c= password[i];
-        if (c==' ') {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool WEBINTERFACE_CLASS::isIPValid(const char * IP)
-{
-    //limited size
-    int internalcount=0;
-    int dotcount = 0;
-    bool previouswasdot=false;
-    char c;
-
-    if (strlen(IP)>15 || strlen(IP)==0) {
-        return false;
-    }
-    //cannot start with .
-    if (IP[0]=='.') {
-        return false;
-    }
-    //only letter and digit
-    for (int i=0; i < strlen(IP); i++) {
-        c = IP[i];
-        if (isdigit(c)) {
-            //only 3 digit at once
-            internalcount++;
-            previouswasdot=false;
-            if (internalcount>3) {
-                return false;
-            }
-        } else if(c=='.') {
-            //cannot have 2 dots side by side
-            if (previouswasdot) {
-                return false;
-            }
-            previouswasdot=true;
-            internalcount=0;
-            dotcount++;
-        }//if not a dot neither a digit it is wrong
-        else {
-            return false;
-        }
-    }
-    //if not 3 dots then it is wrong
-    if (dotcount!=3) {
-        return false;
-    }
-    //cannot have the last dot as last char
-    if (IP[strlen(IP)-1]=='.') {
-        return false;
-    }
-    return true;
-}
-
-//TODO should be in some tool class
-char * intTostr(int value)
-{
-    static char result [12];
-    sprintf(result,"%d",value);
-    return result;
-}
-
-//TODO: should be in webserver class
-bool processTemplate(const char  * filename, STORESTRINGS_CLASS & KeysList ,  STORESTRINGS_CLASS & ValuesList )
+bool WEBINTERFACE_CLASS::processTemplate(const char  * filename, STORESTRINGS_CLASS & KeysList ,  STORESTRINGS_CLASS & ValuesList )
 {
     if(KeysList.size() != ValuesList.size()) { //Sanity check
-		Serial.print("Error");
+        Serial.print("Error");
         return false;
     }
-    
-    LinkedList<File> myFileList  = LinkedList<File>();
+
+    LinkedList<FSFILE> myFileList  = LinkedList<FSFILE>();
     String  buffer2send;
-    String bufferheader(F("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "));
-    int size_content=0;
     bool header_sent=false;
 
-    //one loop to calculate size + one loop to really send
-    //size_content is a mandatory element to avoid memory leak
-    for(int processing_step=0; processing_step<2; processing_step++) {
-        buffer2send="";
-        //open template file
-        File currentfile = SPIFFS.open(filename, "r");
-        //if error display error on web page
-        if (!currentfile) {
-            buffer2send = String(F("Error opening: ")) + filename;
-            web_interface->WebServer.send(200,"text/plain",buffer2send);
-            return false;
-        } else { //template is open
-            int b ;
-            String sLine;
-            bool bprocessing=true;
+    buffer2send="";
+    //open template file
+    FSFILE currentfile = SPIFFS.open(filename, "r");
+    //if error display error on web page
+    if (!currentfile) {
+        buffer2send = String(F("Error opening: ")) + filename;
+        web_interface->WebServer.send(200,"text/plain",buffer2send);
+        return false;
+    } else { //template is open
+        int b ;
+        String sLine;
+        bool bprocessing=true;
 
-            while (bprocessing) { //read all bytes
-                b = currentfile.read(); //from current open file
-                if (b!=-1) { //if not EOF
-                    sLine+=char(b); //add to current line
-                    if (b=='\n') { //end of line is reached
-                        //change all variables by their values
-                        for (int k=0; k<KeysList.size(); k++) {
-                            sLine.replace(KeysList.get(k),ValuesList.get(k));
+        while (bprocessing) { //read all bytes
+            b = currentfile.read(); //from current open file
+            if (b!=-1) { //if not EOF
+                sLine+=char(b); //add to current line
+                if (b=='\n') { //end of line is reached
+                    //change all variables by their values
+                    for (int k=0; k<KeysList.size(); k++) {
+                        sLine.replace(KeysList.get(k),ValuesList.get(k));
+                    }
+                    //is line an Include line ? no others command will be displayed
+                    //but they can be used to build file name like
+                    //$INCLUDE[$SHORT_FILENAME$-$MODE$.inc]$
+                    int pos_tag=sLine.indexOf("$INCLUDE[");
+                    if (pos_tag!=-1) { //if yes
+                        //extract include file name
+                        int pos_tag_end = sLine.indexOf("]$");
+                        String includefilename = "/"+sLine.substring( pos_tag+strlen("$INCLUDE["),pos_tag_end);
+                        //try to open include file
+                        FSFILE includefile = SPIFFS.open(includefilename, "r");
+                        if (!includefile) { //if error display it on web page
+                            buffer2send+= String("Error opening: ") + includefilename;
+                        } else { //if include is open lets read it, current open file is now include file
+                            myFileList.add(currentfile);
+                            currentfile=includefile;
                         }
-                        //is line an Include line ? no others command will be displayed
-                        //but they can be used to build file name like
-                        //$INCLUDE[$SHORT_FILENAME$-$MODE$.inc]$
-                        int pos_tag=sLine.indexOf("$INCLUDE[");
+                    } else { //if it is not include file
+                        //check if there is a table to display
+                        int pos_tag=sLine.indexOf("$CONNECTED_STATIONS[");
                         if (pos_tag!=-1) { //if yes
-                            //extract include file name
-                            int pos_tag_end = sLine.indexOf("]$");
-                            String includefilename = "/"+sLine.substring( pos_tag+strlen("$INCLUDE["),pos_tag_end);
-                            //try to open include file
-                            File includefile = SPIFFS.open(includefilename, "r");
-                            if (!includefile) { //if error display it on web page
-                                buffer2send+= String("Error opening: ") + includefilename;
-                            } else { //if include is open lets read it, current open file is now include file
-                                myFileList.add(currentfile);
-                                currentfile=includefile;
+                            //extract line
+                            int pos_tag_end = sLine.indexOf("]$",pos_tag);
+                            int nb = -1;
+                            int ipos = -1;
+                            //part before repetitive section
+                            String beforelinetoprocess=sLine.substring( 0,pos_tag);
+                            //part after repetitive section
+                            String afterlinetoprocess=sLine.substring( pos_tag_end+2);
+                            //repetitive section itself
+                            String linetoprocess =sLine.substring( pos_tag+strlen("$CONNECTED_STATIONS["),pos_tag_end);
+                            String tablepart;
+                            //get how many items
+                            ipos=KeysList.get_index("$CONNECTED_STATIONS_NB_ITEMS$");
+                            if (ipos >-1) {
+                                //get value
+                                nb=atoi(ValuesList.get(ipos));
+                                ipos=ipos-(nb*3);
                             }
-                        } else { //if it is not include file
-                            //check if there is a table to display
-                            int pos_tag=sLine.indexOf("$CONNECTED_STATIONS[");
-                            if (pos_tag!=-1) { //if yes
-                                //extract line
-                                int pos_tag_end = sLine.indexOf("]$",pos_tag);
-                                int nb = -1;
-                                int ipos = -1;
-                                //part before repetitive section
-                                String beforelinetoprocess=sLine.substring( 0,pos_tag);
-                                //part after repetitive section
-                                String afterlinetoprocess=sLine.substring( pos_tag_end+2);
-                                //repetitive section itself
-                                String linetoprocess =sLine.substring( pos_tag+strlen("$CONNECTED_STATIONS["),pos_tag_end);
-                                String tablepart;
-                                //get how many items
-                                ipos=KeysList.get_index("$CONNECTED_STATIONS_NB_ITEMS$");
-                                if (ipos >-1) {
-                                    //get value
-                                    nb=atoi(ValuesList.get(ipos));
-                                    ipos=ipos-(nb*3);
-                                }
-                                //do a sanity check data are there
-                                String Last_IP_Key = "$IP_CONNECTED["+String(nb-1)+"]$";
-                                if (nb>0 && (KeysList.get_index("$ROW_NUMBER[0]$")==ipos) &&(Last_IP_Key==KeysList.get(ipos-1+(nb*3)))) {
-                                    for (int j=0; j<nb; j++) {
-                                        String tmppart=linetoprocess + "\n";
-                                        if (ipos+j>-1) {
-                                            tmppart.replace("$ROW_NUMBER$",ValuesList.get(ipos+0+(j*3)));
-                                            tmppart.replace("$MAC_CONNECTED$",ValuesList.get(ipos+1+(j*3)));
-                                            tmppart.replace("$IP_CONNECTED$",ValuesList.get(ipos+2+(j*3)));
-                                        }
-                                        tablepart +=tmppart;
+                            //do a sanity check data are there
+                            String Last_IP_Key = "$IP_CONNECTED["+String(nb-1)+"]$";
+                            if (nb>0 && (KeysList.get_index("$ROW_NUMBER[0]$")==ipos) &&(Last_IP_Key==KeysList.get(ipos-1+(nb*3)))) {
+                                for (int j=0; j<nb; j++) {
+                                    String tmppart=linetoprocess + "\n";
+                                    if (ipos+j>-1) {
+                                        tmppart.replace("$ROW_NUMBER$",ValuesList.get(ipos+0+(j*3)));
+                                        tmppart.replace("$MAC_CONNECTED$",ValuesList.get(ipos+1+(j*3)));
+                                        tmppart.replace("$IP_CONNECTED$",ValuesList.get(ipos+2+(j*3)));
                                     }
+                                    tablepart +=tmppart;
                                 }
-                                //now build back
-                                sLine = beforelinetoprocess + tablepart + afterlinetoprocess;
                             }
-
-                            pos_tag=sLine.indexOf("$AVAILABLE_AP[");
-                            if (pos_tag!=-1) { //if yes
-                                //extract line
-                                int pos_tag_end = sLine.indexOf("]$",pos_tag);
-                                int nb = -1;
-                                int ipos = -1;
-                                //part before repetitive section
-                                String beforelinetoprocess=sLine.substring( 0,pos_tag);
-                                //part after repetitive section
-                                String afterlinetoprocess=sLine.substring( pos_tag_end+2);
-                                //repetitive section itself
-                                String linetoprocess =sLine.substring( pos_tag+strlen("$AVAILABLE_AP["),pos_tag_end);
-                                String tablepart;
-                                //get how many items
-                                ipos=KeysList.get_index("$AVAILABLE_AP_NB_ITEMS$");
-                                if (ipos >-1) {
-                                    //get value
-                                    nb=atoi(ValuesList.get(ipos));
-                                    ipos=ipos-(nb*4);
-                                }
-                                //do a sanity check data are there
-                                String Last_IP_Key = "$IS_PROTECTED["+String(nb-1)+"]$";
-                                if (nb>0 && (KeysList.get_index("$ROW_NUMBER[0]$")==ipos) &&(Last_IP_Key==KeysList.get(ipos-1+(nb*4)))) {
-                                    for (int j=0; j<nb; j++) {
-                                        String tmppart=linetoprocess + "\n";
-                                        if (ipos+j>-1) {
-                                            tmppart.replace("$ROW_NUMBER$",ValuesList.get(ipos+0+(j*4)));
-                                            tmppart.replace("$AP_SSID$",ValuesList.get(ipos+1+(j*4)));
-                                            tmppart.replace("$AP_SIGNAL$",ValuesList.get(ipos+2+(j*4)));
-                                            tmppart.replace("$IS_PROTECTED$",ValuesList.get(ipos+3+(j*4)));
-                                        }
-                                        tablepart +=tmppart;
-                                    }
-                                }
-                                //now build back
-                                sLine = beforelinetoprocess + tablepart + afterlinetoprocess;
-                            }
-
-                            //add current line to buffer
-                            buffer2send+=sLine;
-                            //if buffer limit is reached
-                            if (buffer2send.length()>1200) {
-                                //if we are just doing size calculation
-                                if (processing_step==0) {
-                                    //add buffer size
-                                    size_content+=buffer2send.length();
-                                } else { //if no size calculation, send data
-                                    //if header is not send yet
-                                    if (!header_sent) {
-                                        //send header with calculated size
-                                        header_sent=true;
-                                        web_interface->WebServer.sendContent(bufferheader);
-                                        
-                                    }
-                                    //send data
-                                    web_interface->WebServer.sendContent(buffer2send);
-                                }
-                                //reset buffer
-                                buffer2send="";
-                            }
+                            //now build back
+                            sLine = beforelinetoprocess + tablepart + afterlinetoprocess;
                         }
-                        //reset line
-                        sLine="";
-                        //add a delay for safety for WDT
-                        delay(1);
+
+                        pos_tag=sLine.indexOf("$AVAILABLE_AP[");
+                        if (pos_tag!=-1) { //if yes
+                            //extract line
+                            int pos_tag_end = sLine.indexOf("]$",pos_tag);
+                            int nb = -1;
+                            int ipos = -1;
+                            //part before repetitive section
+                            String beforelinetoprocess=sLine.substring( 0,pos_tag);
+                            //part after repetitive section
+                            String afterlinetoprocess=sLine.substring( pos_tag_end+2);
+                            //repetitive section itself
+                            String linetoprocess =sLine.substring( pos_tag+strlen("$AVAILABLE_AP["),pos_tag_end);
+                            String tablepart;
+                            //get how many items
+                            ipos=KeysList.get_index("$AVAILABLE_AP_NB_ITEMS$");
+                            if (ipos >-1) {
+                                //get value
+                                nb=atoi(ValuesList.get(ipos));
+                                ipos=ipos-(nb*4);
+                            }
+                            //do a sanity check data are there
+                            String Last_IP_Key = "$IS_PROTECTED["+String(nb-1)+"]$";
+                            if (nb>0 && (KeysList.get_index("$ROW_NUMBER[0]$")==ipos) &&(Last_IP_Key==KeysList.get(ipos-1+(nb*4)))) {
+                                for (int j=0; j<nb; j++) {
+                                    String tmppart=linetoprocess + "\n";
+                                    if (ipos+j>-1) {
+                                        tmppart.replace("$ROW_NUMBER$",ValuesList.get(ipos+0+(j*4)));
+                                        tmppart.replace("$AP_SSID$",ValuesList.get(ipos+1+(j*4)));
+                                        tmppart.replace("$AP_SIGNAL$",ValuesList.get(ipos+2+(j*4)));
+                                        tmppart.replace("$IS_PROTECTED$",ValuesList.get(ipos+3+(j*4)));
+                                    }
+                                    tablepart +=tmppart;
+                                }
+                            }
+                            //now build back
+                            sLine = beforelinetoprocess + tablepart + afterlinetoprocess;
+                        }
+
+                        //add current line to buffer
+                        buffer2send+=sLine;
+                        //if buffer limit is reached
+                        if (buffer2send.length()>1200) {
+                            //if header is not send yet
+                            if (!header_sent) {
+                                //send header with calculated size
+                                header_sent=true;
+                                web_interface->WebServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+                                web_interface->WebServer.send(200);
+                                web_interface->WebServer.sendHeader("Content-Type","text/html");
+                                web_interface->WebServer.sendHeader("Cache-Control","no-cache");
+                            }
+                            //send data
+                            web_interface->WebServer.sendContent(buffer2send);
+                            //reset buffer
+                            buffer2send="";
+                        }
                     }
-                } else { //EOF is reached
-                    //close current file
-                    currentfile.close();
-                    //if current file is not template file but included one
-                    if (myFileList.size()>0) {
-                        //get level +1 file description and continue
-                        currentfile = myFileList.pop();
-                    } else {
-                        //we have done template parsing, let's stop reading
-                        bprocessing=false;
-                    }
+                    //reset line
+                    sLine="";
+                    //add a delay for safety for WDT
+                    delay(1);
+                }
+            } else { //EOF is reached
+                //close current file
+                currentfile.close();
+                //if current file is not template file but included one
+                if (myFileList.size()>0) {
+                    //get level +1 file description and continue
+                    currentfile = myFileList.pop();
+                } else {
+                    //we have done template parsing, let's stop reading
+                    bprocessing=false;
                 }
             }
-        }
-        //check if something is still in buffer and need to be send
-        if (buffer2send!="") {
-            //if we are doing size calculation
-            if (processing_step==0) {
-                //add buffer size
-                size_content+=buffer2send.length();
-            } else { //if no size calculation, send data
-                //if header is not send yet
-                if (!header_sent) {
-                    //send header with calculated size
-                    web_interface->WebServer.sendContent(bufferheader);
-                }
-                //send data
-                web_interface->WebServer.sendContent(buffer2send);
-                
-            }
-        }
-        //if we end size calculation loop
-        if (processing_step==0) {
-            //let's build the header with correct size'
-            bufferheader.concat(size_content);
-            bufferheader.concat(F("\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n"));
         }
     }
+    //check if something is still in buffer and need to be send
+    if (buffer2send!="") {
+        //if header is not send yet
+        if (!header_sent) {
+            //send header
+            web_interface->WebServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+            web_interface->WebServer.send(200);
+            web_interface->WebServer.sendHeader("Content-Type","text/html");
+            web_interface->WebServer.sendHeader("Cache-Control","no-cache");
+        }
+        //send data
+        web_interface->WebServer.sendContent(buffer2send);
+    }
+    //close line
+    web_interface->WebServer.sendContent("");
     return true;
 }
+
 // -----------------------------------------------------------------------------
 // Helper for FreeMem and Firmware
 // -----------------------------------------------------------------------------
-void GetFreeMem(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
+void WEBINTERFACE_CLASS::GetFreeMem(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 {
     //FreeMem
     KeysList.add(FPSTR(KEY_FREE_MEM));
-    ValuesList.add(intTostr(system_get_free_heap_size()));
+    ValuesList.add(CONFIG::intTostr(ESP.getFreeHeap()));
     //FW Version
     KeysList.add(FPSTR(KEY_FW_VER));
     ValuesList.add(FPSTR(VALUE_FW_VERSION));
 }
+
+// -----------------------------------------------------------------------------
+// Helper for Login ID
+// -----------------------------------------------------------------------------
+void WEBINTERFACE_CLASS::GeLogin(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList,level_authenticate_type auth_level)
+{
+    KeysList.add(FPSTR(KEY_DISCONNECT_VISIBILITY));
+#ifdef AUTHENTICATION_FEATURE
+
+    if (auth_level != LEVEL_GUEST) {
+        ValuesList.add(FPSTR(VALUE_ITEM_VISIBLE));
+        KeysList.add(FPSTR(KEY_LOGIN_ID));
+        if (auth_level == LEVEL_ADMIN) {
+            ValuesList.add(FPSTR(DEFAULT_ADMIN_LOGIN));
+        } else {
+            ValuesList.add(FPSTR(DEFAULT_USER_LOGIN));
+        }
+    } else
+#endif
+    {
+        ValuesList.add(FPSTR(VALUE_ITEM_HIDDEN));
+        KeysList.add(FPSTR(KEY_LOGIN_ID));
+        ValuesList.add("");
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Helper for IP+Web address
 // -----------------------------------------------------------------------------
-void GetIpWeb(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
+void WEBINTERFACE_CLASS::GetIpWeb(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 {
     String stmp;
 
     KeysList.add(FPSTR(KEY_IP));
-    if (wifi_get_opmode() == WIFI_STA ) {
+    if (WiFi.getMode() == WIFI_STA ) {
         stmp = WiFi.localIP().toString();
     } else {
         stmp = WiFi.softAPIP().toString();
@@ -573,13 +457,13 @@ void GetIpWeb(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 // -----------------------------------------------------------------------------
 // Helper for Wifi Mode
 // -----------------------------------------------------------------------------
-void GetMode(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
+void WEBINTERFACE_CLASS::GetMode(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 {
-    if (wifi_get_opmode() == WIFI_STA ) {
+    if (WiFi.getMode() == WIFI_STA ) {
         KeysList.add(FPSTR(KEY_MODE));
         ValuesList.add(FPSTR(VALUE_STA));
     } else {
-        if (wifi_get_opmode() == WIFI_AP ) {
+        if (WiFi.getMode() == WIFI_AP ) {
             KeysList.add(FPSTR(KEY_MODE));
             ValuesList.add(FPSTR(VALUE_AP));
         } else {
@@ -591,16 +475,16 @@ void GetMode(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 // -----------------------------------------------------------------------------
 // Helper for Web ports
 // -----------------------------------------------------------------------------
-void GetPorts(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
+void WEBINTERFACE_CLASS::GetPorts(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 {
     //Web port
     KeysList.add(FPSTR(KEY_WEB_PORT));
-    ValuesList.add(intTostr(wifi_config.iweb_port));
+    ValuesList.add(CONFIG::intTostr(wifi_config.iweb_port));
     //Data port
     KeysList.add(FPSTR(KEY_DATA_PORT));
     KeysList.add(FPSTR(KEY_DATA_PORT_VISIBILITY));
 #ifdef TCP_IP_DATA_FEATURE
-    ValuesList.add(intTostr(wifi_config.idata_port));
+    ValuesList.add(CONFIG::intTostr(wifi_config.idata_port));
     ValuesList.add(FPSTR(VALUE_ITEM_VISIBLE));
 #else
     ValuesList.add(FPSTR(VALUE_NONE));
@@ -610,8 +494,8 @@ void GetPorts(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 // -----------------------------------------------------------------------------
 // Helper for Page properties
 // -----------------------------------------------------------------------------
-void SetPageProp(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList,
-                 const __FlashStringHelper *title, const __FlashStringHelper *filename)
+void WEBINTERFACE_CLASS::SetPageProp(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList,
+                                     const __FlashStringHelper *title, const __FlashStringHelper *filename)
 {
     String fullFilename(filename);
     fullFilename.concat(".tpl");
@@ -630,7 +514,7 @@ void SetPageProp(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList,
 // -----------------------------------------------------------------------------
 // Helper for DHCP (APP/STA)tus
 // -----------------------------------------------------------------------------
-void GetDHCPStatus(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
+void WEBINTERFACE_CLASS::GetDHCPStatus(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 {
     KeysList.add(FPSTR(KEY_AP_DHCP_STATUS));
     if (wifi_softap_dhcps_status() == DHCP_STARTED) {
@@ -650,7 +534,7 @@ void GetDHCPStatus(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesLis
 // -----------------------------------------------------------------------------
 // Helper for Error Msg processing
 // -----------------------------------------------------------------------------
-void ProcessAlertError(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList, String & smsg)
+void WEBINTERFACE_CLASS::ProcessAlertError(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList, String & smsg)
 {
     KeysList.add(FPSTR(KEY_ERROR_MSG));
     ValuesList.add(smsg);
@@ -669,7 +553,7 @@ void ProcessAlertError(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & Value
 // -----------------------------------------------------------------------------
 // Helper for Success Msg processing
 // -----------------------------------------------------------------------------
-void ProcessAlertSuccess(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList, String & smsg)
+void WEBINTERFACE_CLASS::ProcessAlertSuccess(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList, String & smsg)
 {
     KeysList.add(FPSTR(KEY_ERROR_MSG));
     ValuesList.add("");
@@ -686,7 +570,7 @@ void ProcessAlertSuccess(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & Val
 // -----------------------------------------------------------------------------
 // Helper for No Msg processing
 // -----------------------------------------------------------------------------
-void ProcessNoAlert(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
+void WEBINTERFACE_CLASS::ProcessNoAlert(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesList)
 {
     KeysList.add(FPSTR(KEY_ERROR_MSG));
     ValuesList.add("");
@@ -705,35 +589,31 @@ void ProcessNoAlert(STORESTRINGS_CLASS & KeysList, STORESTRINGS_CLASS & ValuesLi
 //root insterface
 void handle_web_interface_root()
 {
-	static const char HOME_PAGE [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /HOME\r\nCache-Control: no-cache\r\n\r\n";
-	web_interface->WebServer.sendContent_P(HOME_PAGE);
+    static const char HOME_PAGE [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /HOME\r\nCache-Control: no-cache\r\n\r\n";
+    web_interface->WebServer.sendContent_P(HOME_PAGE);
 }
 
 //root insterface
 void handle_web_interface_home()
 {
     String stmp;
-    long lstatus;
+    //long lstatus;
     int istatus;
-    byte bbuf;
+    //byte bbuf;
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
     struct softap_config apconfig;
     struct ip_info info;
     uint8_t mac [WL_MAC_ADDR_LENGTH];
 
-    KeysList.add(FPSTR(KEY_DISCONNECT_VISIBILITY));
-    if (web_interface->is_authenticated()) {
-        ValuesList.add(FPSTR(VALUE_ITEM_VISIBLE));
-    } else {
-        ValuesList.add(FPSTR(VALUE_ITEM_HIDDEN));
-    }
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,web_interface->is_authenticated());
 
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
 
     //Hostname
-    if (wifi_get_opmode()==WIFI_STA ) {
+    if (WiFi.getMode()==WIFI_STA ) {
         KeysList.add(FPSTR(KEY_MODE));
         ValuesList.add(FPSTR(VALUE_STA));
         KeysList.add(FPSTR(KEY_HOSTNAME));
@@ -745,7 +625,7 @@ void handle_web_interface_home()
         ValuesList.add(FPSTR(KEY_NOT_APPLICABLE_4_AP));
         KeysList.add(FPSTR(KEY_HOSTNAME_VISIBLE));
         ValuesList.add(FPSTR(VALUE_ITEM_HIDDEN));
-        if (wifi_get_opmode()==WIFI_AP ) {
+        if (WiFi.getMode()==WIFI_AP ) {
             KeysList.add(FPSTR(KEY_MODE));
             ValuesList.add(FPSTR(VALUE_AP));
         } else {
@@ -755,17 +635,17 @@ void handle_web_interface_home()
     }
 
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_HOME),F("home"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_HOME),F("home"));
     //menu item
     KeysList.add(FPSTR(KEY_MENU_HOME));
     ValuesList.add(FPSTR(VALUE_ACTIVE));
 
     //Chip ID
     KeysList.add(FPSTR(KEY_CHIP_ID));
-    ValuesList.add(intTostr(system_get_chip_id()));
+    ValuesList.add(CONFIG::intTostr(system_get_chip_id()));
     //CPU Freq
     KeysList.add(FPSTR(KEY_CPU_FREQ));
-    ValuesList.add(intTostr(system_get_cpu_freq()));
+    ValuesList.add(CONFIG::intTostr(system_get_cpu_freq()));
     //SDK Version
     KeysList.add(FPSTR(KEY_SDK_VER));
     ValuesList.add(system_get_sdk_version());
@@ -801,7 +681,7 @@ void handle_web_interface_home()
 
     //Captive portal Feature
 #ifdef CAPTIVE_PORTAL_FEATURE
-    if (wifi_get_opmode()==WIFI_AP) {
+    if (WiFi.getMode()==WIFI_AP) {
         KeysList.add(FPSTR(KEY_CAPTIVE_PORTAL_STATUS));
         ValuesList.add(FPSTR(VALUE_ENABLED));
         KeysList.add(FPSTR(KEY_CAPTIVE_PORTAL_VISIBLE));
@@ -821,33 +701,33 @@ void handle_web_interface_home()
 
     //network
     KeysList.add(FPSTR(KEY_NET_PHY));
-    if (wifi_get_phy_mode()==PHY_MODE_11B) {
+    if (WiFi.getPhyMode()==WIFI_PHY_MODE_11B) {
         ValuesList.add(FPSTR(VALUE_11B));
-    } else if (wifi_get_phy_mode()==PHY_MODE_11G) {
+    } else if (WiFi.getPhyMode()==WIFI_PHY_MODE_11G) {
         ValuesList.add(FPSTR(VALUE_11G));
     } else {
         ValuesList.add(FPSTR(VALUE_11N));
     }
     //sleep mode
     KeysList.add(FPSTR(KEY_SLEEP_MODE));
-    if (wifi_get_sleep_type()==NONE_SLEEP_T) {
+    if (WiFi.getSleepMode()==WIFI_NONE_SLEEP) {
         ValuesList.add(FPSTR(VALUE_NONE));
-    } else if (wifi_get_sleep_type()==LIGHT_SLEEP_T) {
+    } else if (WiFi.getSleepMode()==WIFI_LIGHT_SLEEP) {
         ValuesList.add(FPSTR(VALUE_LIGHT));
     } else {
         ValuesList.add(FPSTR(VALUE_MODEM));
     }
     //Boot version
     KeysList.add(FPSTR(KEY_BOOT_VER));
-    ValuesList.add(intTostr(system_get_boot_version()));
+    ValuesList.add(CONFIG::intTostr(system_get_boot_version()));
     //Baud rate
     KeysList.add(FPSTR(KEY_BAUD_RATE));
-    ValuesList.add(intTostr(wifi_config.baud_rate));
+    ValuesList.add(CONFIG::intTostr(wifi_config.baud_rate));
     // Web and Data ports
-    GetPorts(KeysList, ValuesList);
+    web_interface->GetPorts(KeysList, ValuesList);
 
     //AP part
-    if (wifi_get_opmode()==WIFI_AP ||  wifi_get_opmode()==WIFI_AP_STA) {
+    if (WiFi.getMode()==WIFI_AP ||  WiFi.getMode()==WIFI_AP_STA) {
         int client_counter=0;
         struct station_info * station;
         //AP is enabled
@@ -867,7 +747,7 @@ void handle_web_interface_home()
             //BSSID
             stmp = "$MAC_CONNECTED["+String(client_counter)+"]$";
             KeysList.add(stmp.c_str());
-            ValuesList.add(wifi_config.mac2str(station->bssid));
+            ValuesList.add(CONFIG::mac2str(station->bssid));
             //IP
             stmp = "$IP_CONNECTED["+String(client_counter)+"]$";
             KeysList.add(stmp.c_str());
@@ -880,7 +760,7 @@ void handle_web_interface_home()
         wifi_softap_free_station_info();
         //Connected clients
         KeysList.add(FPSTR(KEY_CONNECTED_STATIONS_NB_ITEMS));
-        ValuesList.add(intTostr(client_counter));
+        ValuesList.add(CONFIG::intTostr(client_counter));
     } else {
         //AP is disabled
         KeysList.add(FPSTR(KEY_AP_STATUS_ENABLED));
@@ -894,7 +774,7 @@ void handle_web_interface_home()
     }
     //AP mac address
     KeysList.add(FPSTR(KEY_AP_MAC));
-    ValuesList.add(wifi_config.mac2str(WiFi.softAPmacAddress(mac)));
+    ValuesList.add(CONFIG::mac2str(WiFi.softAPmacAddress(mac)));
     //AP configuration
     if (wifi_softap_get_config(&apconfig)) {
         //SSID
@@ -909,7 +789,7 @@ void handle_web_interface_home()
         }
         //Channel
         KeysList.add(FPSTR(KEY_AP_CHANNEL));
-        ValuesList.add(intTostr(apconfig.channel));
+        ValuesList.add(CONFIG::intTostr(apconfig.channel));
         //Authentification mode
         KeysList.add(FPSTR(KEY_AP_AUTH));
         if (apconfig.authmode==AUTH_OPEN) {
@@ -926,7 +806,7 @@ void handle_web_interface_home()
 
         //Max connections
         KeysList.add(FPSTR(KEY_AP_MAX_CON));
-        ValuesList.add(intTostr(apconfig.max_connection));
+        ValuesList.add(CONFIG::intTostr(apconfig.max_connection));
     } else {
         //SSID
         KeysList.add(FPSTR(KEY_AP_SSID));
@@ -945,7 +825,7 @@ void handle_web_interface_home()
         ValuesList.add(FPSTR(VALUE_NOT_AVAILABLE));
     }
     //DHCP Status
-    GetDHCPStatus(KeysList, ValuesList);
+    web_interface->GetDHCPStatus(KeysList, ValuesList);
     //IP/GW/MASK
     if (wifi_get_ip_info(SOFTAP_IF,&info)) {
         //IP address
@@ -969,7 +849,7 @@ void handle_web_interface_home()
         ValuesList.add(FPSTR(VALUE_NO_IP));
     }
     //STA part
-    if (wifi_get_opmode()==WIFI_STA ||  wifi_get_opmode()==WIFI_AP_STA) {
+    if (WiFi.getMode()==WIFI_STA ||  WiFi.getMode()==WIFI_AP_STA) {
         //STA is enabled
         KeysList.add(FPSTR(KEY_STA_STATUS_ENABLED));
         ValuesList.add(FPSTR(VALUE_ENABLED));
@@ -986,7 +866,7 @@ void handle_web_interface_home()
     }
     //STA mac address
     KeysList.add(FPSTR(KEY_STA_MAC));
-    ValuesList.add(wifi_config.mac2str(WiFi.macAddress(mac)));
+    ValuesList.add(CONFIG::mac2str(WiFi.macAddress(mac)));
     //SSID used by STA
     KeysList.add(FPSTR(KEY_STA_SSID));
     if (WiFi.SSID().length()==0) {
@@ -996,7 +876,7 @@ void handle_web_interface_home()
     }
     //Channel
     KeysList.add(FPSTR(KEY_STA_CHANNEL));
-    ValuesList.add(intTostr (wifi_get_channel()));
+    ValuesList.add(CONFIG::intTostr (wifi_get_channel()));
     //Connection status
     istatus = wifi_station_get_connect_status();
     KeysList.add(FPSTR(KEY_STA_STATUS));
@@ -1015,9 +895,9 @@ void handle_web_interface_home()
     }
     //Signal strength
     KeysList.add(FPSTR(KEY_STA_SIGNAL));
-    ValuesList.add(intTostr(100+WiFi.RSSI()));
+    ValuesList.add(CONFIG::intTostr(wifi_config.getSignal(WiFi.RSSI())));
     //DHCP Client status
-    GetDHCPStatus(KeysList, ValuesList);
+    web_interface->GetDHCPStatus(KeysList, ValuesList);
     //IP address
     KeysList.add(FPSTR(KEY_STA_IP));
     ValuesList.add(WiFi.localIP().toString().c_str());
@@ -1031,9 +911,9 @@ void handle_web_interface_home()
     KeysList.add(FPSTR(KEY_SERVICE_PAGE));
     ValuesList.add("");
     //Firmware & Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
     //process the template file and provide list of variables
-    processTemplate("/home.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/home.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
@@ -1044,9 +924,9 @@ void handle_web_interface_configSys()
     static const char NOT_AUTH_CS [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /LOGIN?return=CONFIGSYS\r\nCache-Control: no-cache\r\n\r\n";
 
     String stmp,smsg;
-    long lstatus;
+    //long lstatus;
     int istatus;
-    byte bbuf;
+    //byte bbuf;
     long ibaud=DEFAULT_BAUD_RATE;
     int iweb_port =DEFAULT_WEB_PORT;
     int idata_port =DEFAULT_DATA_PORT;
@@ -1054,22 +934,24 @@ void handle_web_interface_configSys()
     bool msg_alert_error=false;
     bool msg_alert_success=false;
     long lbaudlist[] = {9600 ,19200,38400,57600,115200,230400,250000,-1};
-    int bmodemvaluelist[] = {NONE_SLEEP_T,LIGHT_SLEEP_T,MODEM_SLEEP_T, -1};
+    int bmodemvaluelist[] = {WIFI_NONE_SLEEP,WIFI_LIGHT_SLEEP,WIFI_MODEM_SLEEP, -1};
     const __FlashStringHelper  *smodemdisplaylist[]= {FPSTR(VALUE_NONE),FPSTR(VALUE_LIGHT),FPSTR(VALUE_MODEM),FPSTR(VALUE_MODEM)};
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
 
-    if (!web_interface->is_authenticated()) {
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    if (auth_level != LEVEL_ADMIN) {
         web_interface->WebServer.sendContent_P(NOT_AUTH_CS);
         return;
     }
-
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,auth_level);
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
     //mode
-    GetMode(KeysList, ValuesList);
+    web_interface->GetMode(KeysList, ValuesList);
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_HOME),F("system"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_HOME),F("system"));
     //menu item
     KeysList.add(FPSTR(KEY_MENU_SYSTEM));
     ValuesList.add(FPSTR(VALUE_ACTIVE));
@@ -1077,12 +959,12 @@ void handle_web_interface_configSys()
     //check is it is a submission or a display
     if (web_interface->WebServer.hasArg("SUBMIT")) {
         //is there a correct list of values?
-        if (web_interface->WebServer.hasArg("BAUD_RATE") 
-        && web_interface->WebServer.hasArg("SLEEP_MODE")
- #ifdef TCP_IP_DATA_FEATURE
-        && web_interface->WebServer.hasArg("DATAPORT")
- #endif
-        && web_interface->WebServer.hasArg("WEBPORT")) {
+        if (web_interface->WebServer.hasArg("BAUD_RATE")
+                && web_interface->WebServer.hasArg("SLEEP_MODE")
+#ifdef TCP_IP_DATA_FEATURE
+                && web_interface->WebServer.hasArg("DATAPORT")
+#endif
+                && web_interface->WebServer.hasArg("WEBPORT")) {
             //is each value correct ?
             ibaud  = web_interface->WebServer.arg("BAUD_RATE").toInt();
             iweb_port  = web_interface->WebServer.arg("WEBPORT").toInt();
@@ -1119,7 +1001,7 @@ void handle_web_interface_configSys()
                 KeysList.add(FPSTR(KEY_BAUD_RATE_STATUS));
                 ValuesList.add(FPSTR(VALUE_HAS_ERROR));
             }
-            if (!(bsleepmode==NONE_SLEEP_T ||bsleepmode==LIGHT_SLEEP_T ||bsleepmode==MODEM_SLEEP_T )) {
+            if (!(bsleepmode==WIFI_NONE_SLEEP ||bsleepmode==WIFI_LIGHT_SLEEP ||bsleepmode==WIFI_MODEM_SLEEP )) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: value for sleeping mode is not correct<BR>"));
                 KeysList.add(FPSTR(KEY_SLEEP_MODE_STATUS));
@@ -1132,11 +1014,11 @@ void handle_web_interface_configSys()
         //if no error apply the changes
         if (msg_alert_error!=true) {
             if(!CONFIG::write_buffer(EP_BAUD_RATE,(const byte *)&ibaud,INTEGER_LENGTH)
-            ||!CONFIG::write_buffer(EP_WEB_PORT,(const byte *)&iweb_port,INTEGER_LENGTH)
-#ifdef TCP_IP_DATA_FEATURE 
-            ||!CONFIG::write_buffer(EP_DATA_PORT,(const byte *)&idata_port,INTEGER_LENGTH)
+                    ||!CONFIG::write_buffer(EP_WEB_PORT,(const byte *)&iweb_port,INTEGER_LENGTH)
+#ifdef TCP_IP_DATA_FEATURE
+                    ||!CONFIG::write_buffer(EP_DATA_PORT,(const byte *)&idata_port,INTEGER_LENGTH)
 #endif
-            ||!CONFIG::write_byte(EP_SLEEP_MODE,bsleepmode)) {
+                    ||!CONFIG::write_byte(EP_SLEEP_MODE,bsleepmode)) {
                 msg_alert_error=true;
                 smsg = FPSTR(EEPROM_NOWRITE);
             } else {
@@ -1169,13 +1051,13 @@ void handle_web_interface_configSys()
     stmp="";
     while (lbaudlist[istatus]>-1) {
         stmp+="<OPTION VALUE=\"";
-        stmp+= intTostr(lbaudlist[istatus]);
+        stmp+= CONFIG::intTostr(lbaudlist[istatus]);
         stmp+="\" ";
         if (lbaudlist[istatus]==ibaud) {
             stmp+=FPSTR(VALUE_SELECTED);
         }
         stmp+=">" ;
-        stmp+=intTostr(lbaudlist[istatus]);
+        stmp+=CONFIG::intTostr(lbaudlist[istatus]);
         stmp+= "</OPTION>\n";
         istatus++;
     }
@@ -1186,7 +1068,7 @@ void handle_web_interface_configSys()
     stmp="";
     while (bmodemvaluelist[istatus]>-1) {
         stmp+="<OPTION VALUE=\"";
-        stmp+= intTostr(bmodemvaluelist[istatus]);
+        stmp+= CONFIG::intTostr(bmodemvaluelist[istatus]);
         stmp+="\" ";
         if (bmodemvaluelist[istatus]==bsleepmode) {
             stmp+=FPSTR(VALUE_SELECTED);
@@ -1200,12 +1082,12 @@ void handle_web_interface_configSys()
     ValuesList.add(stmp);
 
     // Web and Data ports
-    GetPorts(KeysList, ValuesList);
+    web_interface->GetPorts(KeysList, ValuesList);
 
     if (msg_alert_error) {
-        ProcessAlertError(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertError(KeysList, ValuesList, smsg);
     } else if (msg_alert_success) {
-        ProcessAlertSuccess(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertSuccess(KeysList, ValuesList, smsg);
         KeysList.add(FPSTR(KEY_SERVICE_PAGE));
         ValuesList.add(FPSTR(RESTARTCMD));
         KeysList.add(FPSTR(KEY_BAUD_RATE_STATUS));
@@ -1221,7 +1103,7 @@ void handle_web_interface_configSys()
     else
 
     {
-        ProcessNoAlert(KeysList, ValuesList);
+        web_interface->ProcessNoAlert(KeysList, ValuesList);
     }
     KeysList.add(FPSTR(KEY_WEB_UPDATE));
 #ifdef WEB_UPDATE_FEATURE
@@ -1230,15 +1112,16 @@ void handle_web_interface_configSys()
     ValuesList.add(FPSTR(VALUE_ITEM_HIDDEN));
 #endif
     //Firmware and Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
 
     //process the template file and provide list of variables
-    processTemplate("/system.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/system.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
 }
 
+#ifdef AUTHENTICATION_FEATURE
 void handle_password()
 {
     static const char NOT_AUTH_PW [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /LOGIN?return=PASSWORD\r\nCache-Control: no-cache\r\n\r\n";
@@ -1247,21 +1130,22 @@ void handle_password()
     String sPassword,sPassword2;
     bool msg_alert_error=false;
     bool msg_alert_success=false;
-    int ipos;
+    //int ipos;
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
-
-    if (!web_interface->is_authenticated()) {
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    if (auth_level == LEVEL_GUEST) {
         web_interface->WebServer.sendContent_P(NOT_AUTH_PW);
         return;
     }
-
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,auth_level);
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
     //mode
-    GetMode(KeysList, ValuesList);
+    web_interface->GetMode(KeysList, ValuesList);
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_CHANGE_PASSWORD),F("password"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_CHANGE_PASSWORD),F("password"));
     //menu item
     KeysList.add(FPSTR(KEY_MENU_ADMIN));
     ValuesList.add(FPSTR(VALUE_ACTIVE));
@@ -1272,9 +1156,9 @@ void handle_password()
         //is there a correct list of values?
         if (web_interface->WebServer.hasArg("PASSWORD") && web_interface->WebServer.hasArg("PASSWORD2")) {
             //Password
-            web_interface->urldecode(sPassword,web_interface->WebServer.arg("PASSWORD").c_str());
-            web_interface->urldecode(sPassword2,web_interface->WebServer.arg("PASSWORD2").c_str());
-            if (!web_interface->isAdminPasswordValid(sPassword.c_str()) ) {
+            sPassword =web_interface->WebServer.arg("PASSWORD");
+            sPassword2 = web_interface->WebServer.arg("PASSWORD2");
+            if (!CONFIG::isLocalPasswordValid(sPassword.c_str()) ) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect password<BR>"));
                 KeysList.add(FPSTR(KEY_USER_PASSWORD_STATUS));
@@ -1294,7 +1178,13 @@ void handle_password()
         //if no error apply the change
         if (msg_alert_error==false) {
             //save
-            if(!CONFIG::write_string(EP_ADMIN_PWD,sPassword.c_str())) {
+            bool res;
+            if (auth_level == LEVEL_ADMIN) {
+                res = CONFIG::write_string(EP_ADMIN_PWD,sPassword.c_str()) ;
+            } else {
+                res = CONFIG::write_string(EP_USER_PWD,sPassword.c_str()) ;
+            }
+            if (!res) {
                 msg_alert_error=true;
                 smsg = FPSTR(EEPROM_NOWRITE);
             } else {
@@ -1317,9 +1207,9 @@ void handle_password()
     ValuesList.add(sPassword2);
 
     if (msg_alert_error) {
-        ProcessAlertError(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertError(KeysList, ValuesList, smsg);
     } else if (msg_alert_success) {
-        ProcessAlertSuccess(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertSuccess(KeysList, ValuesList, smsg);
         KeysList.add(FPSTR(KEY_SERVICE_PAGE));
         ValuesList.add("");
         //Add all green
@@ -1332,19 +1222,19 @@ void handle_password()
     else
 
     {
-        ProcessNoAlert(KeysList,ValuesList);
+        web_interface->ProcessNoAlert(KeysList,ValuesList);
     }
 
     //Firmware and Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
 
     //process the template file and provide list of variables
-    processTemplate("/password.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/password.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
 }
-
+#endif
 
 void handle_web_interface_configAP()
 {
@@ -1355,6 +1245,7 @@ void handle_web_interface_configAP()
     bool msg_alert_error=false;
     bool msg_alert_success=false;
     byte visible_buf;
+    byte default_mode;
     byte static_ip_buf;
     byte auth_buf;
     byte channel_buf;
@@ -1363,24 +1254,26 @@ void handle_web_interface_configAP()
     byte gw_sav[4];
     byte msk_sav[4];
     int ipos;
-    int inetworkvaluelist []= {PHY_MODE_11B,PHY_MODE_11G,-1};
+    int inetworkvaluelist []= {WIFI_PHY_MODE_11B,WIFI_PHY_MODE_11G,-1};
     const __FlashStringHelper  * inetworkdisplaylist []= {FPSTR(VALUE_11B),FPSTR(VALUE_11G),FPSTR(VALUE_11B)};
     int iauthvaluelist[] = {AUTH_OPEN,AUTH_WPA_PSK,AUTH_WPA2_PSK,AUTH_WPA_WPA2_PSK,-1};
     const __FlashStringHelper  * iauthdisplaylist[] = {FPSTR(VALUE_NONE),FPSTR(VALUE_WPA),FPSTR(VALUE_WPA2),FPSTR(VALUE_WPAWPA2)};
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
 
-    if (!web_interface->is_authenticated()) {
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    if (auth_level != LEVEL_ADMIN) {
         web_interface->WebServer.sendContent_P(NOT_AUTH_AP);
         return;
     }
-
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,auth_level);
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
     //mode
-    GetMode(KeysList, ValuesList);
+    web_interface->GetMode(KeysList, ValuesList);
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_CONFIG_AP),F("config_ap"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_CONFIG_AP),F("config_ap"));
     //menu item
     KeysList.add(FPSTR(KEY_MENU_AP));
     ValuesList.add(FPSTR(VALUE_ACTIVE));
@@ -1394,16 +1287,16 @@ void handle_web_interface_configAP()
                 && web_interface->WebServer.hasArg("GATEWAY")&& web_interface->WebServer.hasArg("SUBNET")
                 && web_interface->WebServer.hasArg("CHANNEL")) {
             //SSID
-            web_interface->urldecode(sSSID,web_interface->WebServer.arg("SSID").c_str());
-            if (!web_interface->isSSIDValid(sSSID.c_str())) {
+            sSSID = web_interface->WebServer.arg("SSID");
+            if (!CONFIG::isSSIDValid(sSSID.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect SSID<BR>"));
                 KeysList.add(FPSTR(KEY_AP_SSID_STATUS));
                 ValuesList.add(FPSTR(VALUE_HAS_ERROR));
             }
             //Password
-            web_interface->urldecode(sPassword,web_interface->WebServer.arg("PASSWORD").c_str());
-            if (!web_interface->isPasswordValid(sPassword.c_str())) {
+            sPassword = web_interface->WebServer.arg("PASSWORD");
+            if (!CONFIG::isPasswordValid(sPassword.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect password<BR>"));
                 KeysList.add(FPSTR(KEY_AP_PASSWORD_STATUS));
@@ -1415,9 +1308,18 @@ void handle_web_interface_configAP()
             } else {
                 visible_buf=0;
             }
+
+            //Default mode ?
+            if (web_interface->WebServer.hasArg("DEFAULT_MODE") ) {
+                default_mode=AP_MODE;
+                LOG("Set AP Mode\n")
+            } else {
+                default_mode=CLIENT_MODE;
+                LOG("Set Station mode\n")
+            }
             //phy mode
             phy_mode_buf  = byte(web_interface->WebServer.arg("NETWORK").toInt());
-            if (!(phy_mode_buf==PHY_MODE_11B||phy_mode_buf==PHY_MODE_11G) ) {
+            if (!(phy_mode_buf==WIFI_PHY_MODE_11B||phy_mode_buf==WIFI_PHY_MODE_11G) ) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect network<BR>"));
                 KeysList.add(FPSTR(KEY_NETWORK_OPTION_LIST_STATUS));
@@ -1443,13 +1345,15 @@ void handle_web_interface_configAP()
             //Static IP ?
             if (web_interface->WebServer.hasArg("STATIC_IP") ) {
                 static_ip_buf=STATIC_IP_MODE;
+                LOG("Set Static\n")
             } else {
                 static_ip_buf=DHCP_MODE;
+                LOG("Set DHCP\n")
             }
 
             //IP
-            web_interface->urldecode(sIP,web_interface->WebServer.arg("IP").c_str());
-            if (!web_interface->isIPValid(sIP.c_str())) {
+            sIP = web_interface->WebServer.arg("IP");
+            if (!CONFIG::isIPValid(sIP.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect IP fortmat<BR>"));
                 KeysList.add(FPSTR(KEY_AP_IP_STATUS));
@@ -1457,16 +1361,16 @@ void handle_web_interface_configAP()
             }
 
             //Gateway
-            web_interface->urldecode(sGW,web_interface->WebServer.arg("GATEWAY").c_str());
-            if (!web_interface->isIPValid(sGW.c_str())) {
+            sGW = web_interface->WebServer.arg("GATEWAY");
+            if (!CONFIG::isIPValid(sGW.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect gateway<BR>"));
                 KeysList.add(FPSTR(KEY_AP_GW_STATUS));
                 ValuesList.add(FPSTR(VALUE_HAS_ERROR));
             }
             //subnet
-            web_interface->urldecode(sMask,web_interface->WebServer.arg("SUBNET").c_str());
-            if (!web_interface->isIPValid(sMask.c_str())) {
+            sMask = web_interface->WebServer.arg("SUBNET");
+            if (!CONFIG::isIPValid(sMask.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect subnet<BR>"));
                 KeysList.add(FPSTR(KEY_AP_SUBNET_STATUS));
@@ -1480,20 +1384,20 @@ void handle_web_interface_configAP()
         //if no error apply the change
         if (msg_alert_error==false) {
             //save
-            wifi_config.split_ip(sIP.c_str(),ip_sav);
-            wifi_config.split_ip(sGW.c_str(),gw_sav);
-            wifi_config.split_ip(sMask.c_str(),msk_sav);
-            if((!CONFIG::write_byte(EP_WIFI_MODE,AP_MODE))||
-                    (!CONFIG::write_string(EP_SSID,sSSID.c_str()))||
-                    (!CONFIG::write_string(EP_PASSWORD,sPassword.c_str()))||
+            CONFIG::split_ip(sIP.c_str(),ip_sav);
+            CONFIG::split_ip(sGW.c_str(),gw_sav);
+            CONFIG::split_ip(sMask.c_str(),msk_sav);
+            if((!CONFIG::write_byte(EP_WIFI_MODE,default_mode))||
+                    (!CONFIG::write_string(EP_AP_SSID,sSSID.c_str()))||
+                    (!CONFIG::write_string(EP_AP_PASSWORD,sPassword.c_str()))||
                     (!CONFIG::write_byte(EP_SSID_VISIBLE,visible_buf))||
-                    (!CONFIG::write_byte(EP_PHY_MODE,phy_mode_buf))||
+                    (!CONFIG::write_byte(EP_AP_PHY_MODE,phy_mode_buf))||
                     (!CONFIG::write_byte(EP_CHANNEL,channel_buf)) ||
                     (!CONFIG::write_byte(EP_AUTH_TYPE,auth_buf)) ||
-                    (!CONFIG::write_byte(EP_IP_MODE,static_ip_buf)) ||
-                    (!CONFIG::write_buffer(EP_IP_VALUE,ip_sav,IP_LENGTH))||
-                    (!CONFIG::write_buffer(EP_GATEWAY_VALUE,gw_sav,IP_LENGTH))||
-                    (!CONFIG::write_buffer(EP_MASK_VALUE,msk_sav,IP_LENGTH))) {
+                    (!CONFIG::write_byte(EP_AP_IP_MODE,static_ip_buf)) ||
+                    (!CONFIG::write_buffer(EP_AP_IP_VALUE,ip_sav,IP_LENGTH))||
+                    (!CONFIG::write_buffer(EP_AP_GATEWAY_VALUE,gw_sav,IP_LENGTH))||
+                    (!CONFIG::write_buffer(EP_AP_MASK_VALUE,msk_sav,IP_LENGTH))) {
                 msg_alert_error=true;
                 smsg = FPSTR(EEPROM_NOWRITE);
             } else {
@@ -1505,19 +1409,19 @@ void handle_web_interface_configAP()
 
     else { //no submit need to get data from EEPROM
         //ssid
-        if (!CONFIG::read_string(EP_SSID, sSSID , MAX_SSID_LENGTH) ) {
-            sSSID=FPSTR(DEFAULT_SSID);
+        if (!CONFIG::read_string(EP_AP_SSID, sSSID , MAX_SSID_LENGTH) ) {
+            sSSID=FPSTR(DEFAULT_AP_SSID);
         }
         //password
-        if (!CONFIG::read_string(EP_PASSWORD, sPassword , MAX_PASSWORD_LENGTH) ) {
-            sPassword=FPSTR(DEFAULT_PASSWORD);
+        if (!CONFIG::read_string(EP_AP_PASSWORD, sPassword , MAX_PASSWORD_LENGTH) ) {
+            sPassword=FPSTR(DEFAULT_AP_PASSWORD);
         }
         //ssid visible ?
         if (!CONFIG::read_byte(EP_SSID_VISIBLE, &visible_buf )) {
             visible_buf=DEFAULT_SSID_VISIBLE;
         }
         //phy mode
-        if (!CONFIG::read_byte(EP_PHY_MODE, &phy_mode_buf )) {
+        if (!CONFIG::read_byte(EP_AP_PHY_MODE, &phy_mode_buf )) {
             phy_mode_buf=DEFAULT_PHY_MODE;
         }
         //authentification
@@ -1528,26 +1432,30 @@ void handle_web_interface_configAP()
         if (!CONFIG::read_byte(EP_CHANNEL, &channel_buf )) {
             channel_buf=DEFAULT_CHANNEL;
         }
+        //Default mode ?
+        if (!CONFIG::read_byte(EP_WIFI_MODE, &default_mode )) {
+            default_mode=AP_MODE;
+        }
         //static IP ?
-        if (!CONFIG::read_byte(EP_IP_MODE, &static_ip_buf )) {
-            static_ip_buf=DEFAULT_IP_MODE;
+        if (!CONFIG::read_byte(EP_AP_IP_MODE, &static_ip_buf )) {
+            static_ip_buf=DEFAULT_AP_IP_MODE;
         }
         //IP for static IP
-        if (!CONFIG::read_buffer(EP_IP_VALUE,ip_sav , IP_LENGTH) ) {
+        if (!CONFIG::read_buffer(EP_AP_IP_VALUE,ip_sav , IP_LENGTH) ) {
             sIP=IPAddress((const uint8_t *)DEFAULT_IP_VALUE).toString();
-            
+
         } else {
             sIP=IPAddress((const uint8_t *)ip_sav).toString();
         }
         //GW for static IP
-        if (!CONFIG::read_buffer(EP_GATEWAY_VALUE,gw_sav , IP_LENGTH) ) {
+        if (!CONFIG::read_buffer(EP_AP_GATEWAY_VALUE,gw_sav , IP_LENGTH) ) {
             sGW=IPAddress((const uint8_t *)DEFAULT_GATEWAY_VALUE).toString();
         } else {
             sGW=IPAddress((const uint8_t *)gw_sav).toString();
         }
 
         //Subnet for static IP
-        if (!CONFIG::read_buffer(EP_MASK_VALUE,msk_sav , IP_LENGTH) ) {
+        if (!CONFIG::read_buffer(EP_AP_MASK_VALUE,msk_sav , IP_LENGTH) ) {
             sMask=IPAddress((const uint8_t *)DEFAULT_MASK_VALUE).toString();
         } else {
             sMask=IPAddress((const uint8_t *)msk_sav).toString();
@@ -1567,17 +1475,23 @@ void handle_web_interface_configAP()
     //ssid visible ?
     KeysList.add(FPSTR(KEY_IS_SSID_VISIBLE));
     if (visible_buf==1) {
-        ValuesList.add(VALUE_CHECKED);
+        ValuesList.add(FPSTR(VALUE_CHECKED));
     } else {
         ValuesList.add("");
     }
-
+    //Default mode ?
+    KeysList.add(FPSTR(KEY_IS_DEFAULT_MODE));
+    if (   default_mode==AP_MODE) {
+        ValuesList.add(FPSTR(VALUE_CHECKED));
+    } else {
+        ValuesList.add("");
+    }
     //network
     ipos = 0;
     stmp="";
     while (inetworkvaluelist[ipos]>-1) {
         stmp+="<OPTION VALUE=\"";
-        stmp+= intTostr(inetworkvaluelist[ipos]);
+        stmp+= CONFIG::intTostr(inetworkvaluelist[ipos]);
         stmp+="\" ";
         if (inetworkvaluelist[ipos]==phy_mode_buf) {
             stmp+=FPSTR(VALUE_SELECTED);
@@ -1594,7 +1508,7 @@ void handle_web_interface_configAP()
     stmp ="";
     for (int c=1; c < 12; c++) {
         stmp+="<OPTION VALUE=\"";
-        stmp+=intTostr(c);
+        stmp+=CONFIG::intTostr(c);
         stmp+="\" ";
         if (channel_buf==c) {
             stmp += FPSTR(VALUE_SELECTED);
@@ -1602,7 +1516,7 @@ void handle_web_interface_configAP()
             stmp+="";
         }
         stmp+=" >";
-        stmp+=intTostr(c);
+        stmp+=CONFIG::intTostr(c);
         stmp+= "</OPTION>\n";
     }
 
@@ -1613,7 +1527,7 @@ void handle_web_interface_configAP()
     stmp="";
     while (iauthvaluelist[ipos]>-1) {
         stmp+="<OPTION VALUE=\"";
-        stmp+= intTostr(iauthvaluelist[ipos]);
+        stmp+= CONFIG::intTostr(iauthvaluelist[ipos]);
         stmp+="\" ";
         if (iauthvaluelist[ipos]==auth_buf) {
             stmp+=FPSTR(VALUE_SELECTED);
@@ -1629,7 +1543,7 @@ void handle_web_interface_configAP()
     //static IP ?
     KeysList.add(FPSTR(KEY_IS_STATIC_IP));
     if (static_ip_buf==STATIC_IP_MODE) {
-        ValuesList.add(VALUE_CHECKED);
+        ValuesList.add(FPSTR(VALUE_CHECKED));
     } else {
         ValuesList.add("");
     }
@@ -1647,9 +1561,9 @@ void handle_web_interface_configAP()
     ValuesList.add(sMask);
 
     if (msg_alert_error) {
-        ProcessAlertError(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertError(KeysList, ValuesList, smsg);
     } else if (msg_alert_success) {
-        ProcessAlertSuccess(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertSuccess(KeysList, ValuesList, smsg);
         KeysList.add(FPSTR(KEY_SERVICE_PAGE));
         ValuesList.add(FPSTR(RESTARTCMD));
         //Add all green
@@ -1678,13 +1592,13 @@ void handle_web_interface_configAP()
     else
 
     {
-        ProcessNoAlert(KeysList,ValuesList);
+        web_interface->ProcessNoAlert(KeysList,ValuesList);
     }
 
     //Firmware and Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
     //process the template file and provide list of variables
-    processTemplate("/config_ap.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/config_ap.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
@@ -1698,6 +1612,7 @@ void handle_web_interface_configSTA()
     String sSSID,sPassword,sIP,sGW,sMask,sHostname;
     bool msg_alert_error=false;
     bool msg_alert_success=false;
+    byte default_mode;
     byte static_ip_buf;
     byte phy_mode_buf;
     byte ip_sav[4];
@@ -1705,22 +1620,24 @@ void handle_web_interface_configSTA()
     byte msk_sav[4];
     bool revertSTA=false;
     int ipos;
-    int inetworkvaluelist []= {PHY_MODE_11B,PHY_MODE_11G,PHY_MODE_11N,-1};
+    int inetworkvaluelist []= {WIFI_PHY_MODE_11B,WIFI_PHY_MODE_11G,WIFI_PHY_MODE_11N,-1};
     const __FlashStringHelper  * inetworkdisplaylist []= {FPSTR(VALUE_11B),FPSTR(VALUE_11G),FPSTR(VALUE_11N),FPSTR(VALUE_11B)};
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
 
-    if (!web_interface->is_authenticated()) {
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    if (auth_level != LEVEL_ADMIN) {
         web_interface->WebServer.sendContent_P(NOT_AUTH_STA);
         return;
     }
-
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,auth_level);
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
     //mode
-    GetMode(KeysList, ValuesList);
+    web_interface->GetMode(KeysList, ValuesList);
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_CONFIG_STA),F("config_sta"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_CONFIG_STA),F("config_sta"));
     //menu item
     KeysList.add(FPSTR(KEY_MENU_STA));
     ValuesList.add(FPSTR(VALUE_ACTIVE));
@@ -1732,8 +1649,8 @@ void handle_web_interface_configSTA()
                 && web_interface->WebServer.hasArg("IP") && web_interface->WebServer.hasArg("GATEWAY")&& web_interface->WebServer.hasArg("SUBNET")
                 && web_interface->WebServer.hasArg("HOSTNAME")) {
             //SSID
-            web_interface->urldecode(sSSID,web_interface->WebServer.arg("SSID").c_str());
-            if (!web_interface->isSSIDValid(sSSID.c_str())) {
+            sSSID = web_interface->WebServer.arg("SSID");
+            if (!CONFIG::isSSIDValid(sSSID.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect SSID<BR>"));
                 KeysList.add(FPSTR(KEY_STA_SSID_STATUS));
@@ -1741,8 +1658,8 @@ void handle_web_interface_configSTA()
             }
 
             //Password
-            web_interface->urldecode(sPassword,web_interface->WebServer.arg("PASSWORD").c_str());
-            if (!web_interface->isPasswordValid(sPassword.c_str())) {
+            sPassword = web_interface->WebServer.arg("PASSWORD");
+            if (!CONFIG::isPasswordValid(sPassword.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect password<BR>"));
                 KeysList.add(FPSTR(KEY_STA_PASSWORD_STATUS));
@@ -1750,8 +1667,8 @@ void handle_web_interface_configSTA()
             }
 
             //Hostname
-            web_interface->urldecode(sHostname,web_interface->WebServer.arg("HOSTNAME").c_str());
-            if (!web_interface->isHostnameValid(sHostname.c_str())) {
+            sHostname = web_interface->WebServer.arg("HOSTNAME");
+            if (!CONFIG::isHostnameValid(sHostname.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect hostname<BR>"));
                 KeysList.add(FPSTR(KEY_HOSTNAME_STATUS));
@@ -1760,13 +1677,20 @@ void handle_web_interface_configSTA()
 
             //phy mode
             phy_mode_buf  = byte(web_interface->WebServer.arg("NETWORK").toInt());
-            if (!(phy_mode_buf==PHY_MODE_11B||phy_mode_buf==PHY_MODE_11G||phy_mode_buf==PHY_MODE_11N) ) {
+            if (!(phy_mode_buf==WIFI_PHY_MODE_11B||phy_mode_buf==WIFI_PHY_MODE_11G||phy_mode_buf==WIFI_PHY_MODE_11N) ) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect network<BR>"));
                 KeysList.add(FPSTR(KEY_NETWORK_OPTION_LIST_STATUS));
                 ValuesList.add(FPSTR(VALUE_HAS_ERROR));
             }
-
+            //Default mode ?
+            if (web_interface->WebServer.hasArg("DEFAULT_MODE") ) {
+                default_mode=CLIENT_MODE;
+                LOG("Set STA mode\n")
+            } else {
+                default_mode=AP_MODE;
+                LOG("Set AP mode\n")
+            }
             //Static IP ?
             if (web_interface->WebServer.hasArg("STATIC_IP") ) {
                 static_ip_buf=STATIC_IP_MODE;
@@ -1775,8 +1699,8 @@ void handle_web_interface_configSTA()
             }
 
             //IP
-            web_interface->urldecode(sIP,web_interface->WebServer.arg("IP").c_str());
-            if (!web_interface->isIPValid(sIP.c_str())) {
+            sIP= web_interface->WebServer.arg("IP");
+            if (!CONFIG::isIPValid(sIP.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect IP format<BR>"));
                 KeysList.add(FPSTR(KEY_STA_IP_STATUS));
@@ -1784,16 +1708,16 @@ void handle_web_interface_configSTA()
             }
 
             //Gateway
-            web_interface->urldecode(sGW,web_interface->WebServer.arg("GATEWAY").c_str());
-            if (!web_interface->isIPValid(sGW.c_str())) {
+            sGW = web_interface->WebServer.arg("GATEWAY");
+            if (!CONFIG::isIPValid(sGW.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect gateway<BR>"));
                 KeysList.add(FPSTR(KEY_STA_GW_STATUS));
                 ValuesList.add(FPSTR(VALUE_HAS_ERROR));
             }
             //subnet
-            web_interface->urldecode(sMask,web_interface->WebServer.arg("SUBNET").c_str());
-            if (!web_interface->isIPValid(sMask.c_str())) {
+            sMask = web_interface->WebServer.arg("SUBNET");
+            if (!CONFIG::isIPValid(sMask.c_str())) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect subnet<BR>"));
                 KeysList.add(FPSTR(KEY_STA_SUBNET_STATUS));
@@ -1807,18 +1731,18 @@ void handle_web_interface_configSTA()
         //no error ? then save
         if (msg_alert_error==false) {
             //save
-            wifi_config.split_ip(sIP.c_str(),ip_sav);
-            wifi_config.split_ip(sGW.c_str(),gw_sav);
-            wifi_config.split_ip(sMask.c_str(),msk_sav);
-            if((!CONFIG::write_byte(EP_WIFI_MODE,CLIENT_MODE))||
-                    (!CONFIG::write_string(EP_SSID,sSSID.c_str()))||
-                    (!CONFIG::write_string(EP_PASSWORD,sPassword.c_str()))||
+            CONFIG::split_ip(sIP.c_str(),ip_sav);
+            CONFIG::split_ip(sGW.c_str(),gw_sav);
+            CONFIG::split_ip(sMask.c_str(),msk_sav);
+            if((!CONFIG::write_byte(EP_WIFI_MODE,default_mode))||
+                    (!CONFIG::write_string(EP_STA_SSID,sSSID.c_str()))||
+                    (!CONFIG::write_string(EP_STA_PASSWORD,sPassword.c_str()))||
                     (!CONFIG::write_string(EP_HOSTNAME,sHostname.c_str()))||
-                    (!CONFIG::write_byte(EP_PHY_MODE,phy_mode_buf))||
-                    (!CONFIG::write_byte(EP_IP_MODE,static_ip_buf)) ||
-                    (!CONFIG::write_buffer(EP_IP_VALUE,ip_sav,IP_LENGTH))||
-                    (!CONFIG::write_buffer(EP_GATEWAY_VALUE,gw_sav,IP_LENGTH))||
-                    (!CONFIG::write_buffer(EP_MASK_VALUE,msk_sav,IP_LENGTH))) {
+                    (!CONFIG::write_byte(EP_STA_PHY_MODE,phy_mode_buf))||
+                    (!CONFIG::write_byte(EP_STA_IP_MODE,static_ip_buf)) ||
+                    (!CONFIG::write_buffer(EP_STA_IP_VALUE,ip_sav,IP_LENGTH))||
+                    (!CONFIG::write_buffer(EP_STA_GATEWAY_VALUE,gw_sav,IP_LENGTH))||
+                    (!CONFIG::write_buffer(EP_STA_MASK_VALUE,msk_sav,IP_LENGTH))) {
                 msg_alert_error=true;
                 smsg = FPSTR(EEPROM_NOWRITE);
             } else {
@@ -1828,39 +1752,43 @@ void handle_web_interface_configSTA()
         }
     } else { //no submit, need to get data from EEPROM
         //ssid
-        if (!CONFIG::read_string(EP_SSID, sSSID , MAX_SSID_LENGTH) ) {
-            sSSID=FPSTR(DEFAULT_SSID);
+        if (!CONFIG::read_string(EP_STA_SSID, sSSID , MAX_SSID_LENGTH) ) {
+            sSSID=FPSTR(DEFAULT_STA_SSID);
         }
         //password
-        if (!CONFIG::read_string(EP_PASSWORD, sPassword , MAX_PASSWORD_LENGTH) ) {
-            sPassword=FPSTR(DEFAULT_PASSWORD);
+        if (!CONFIG::read_string(EP_STA_PASSWORD, sPassword , MAX_PASSWORD_LENGTH) ) {
+            sPassword=FPSTR(DEFAULT_STA_PASSWORD);
         }
         //hostname
         if (!CONFIG::read_string(EP_HOSTNAME, sHostname , MAX_HOSTNAME_LENGTH) ) {
             sHostname=wifi_config.get_default_hostname();
         }
+        //Default mode ?
+        if (!CONFIG::read_byte(EP_WIFI_MODE, &default_mode )) {
+            default_mode=AP_MODE;
+        }
         //phy mode
-        if (!CONFIG::read_byte(EP_PHY_MODE, &phy_mode_buf )) {
+        if (!CONFIG::read_byte(EP_STA_PHY_MODE, &phy_mode_buf )) {
             phy_mode_buf=DEFAULT_PHY_MODE;
         }
         //static IP ?
-        if (!CONFIG::read_byte(EP_IP_MODE, &static_ip_buf )) {
-            static_ip_buf=DEFAULT_IP_MODE;
+        if (!CONFIG::read_byte(EP_STA_IP_MODE, &static_ip_buf )) {
+            static_ip_buf=DEFAULT_STA_IP_MODE;
         }
         //IP for static IP
-        if (!CONFIG::read_buffer(EP_IP_VALUE,ip_sav , IP_LENGTH) ) {
+        if (!CONFIG::read_buffer(EP_STA_IP_VALUE,ip_sav , IP_LENGTH) ) {
             sIP=IPAddress((const uint8_t *)DEFAULT_IP_VALUE).toString();
         } else {
             sIP=IPAddress((const uint8_t *)ip_sav).toString();
         }
         //GW for static IP
-        if (!CONFIG::read_buffer(EP_GATEWAY_VALUE,gw_sav , IP_LENGTH) ) {
+        if (!CONFIG::read_buffer(EP_STA_GATEWAY_VALUE,gw_sav , IP_LENGTH) ) {
             sGW=IPAddress((const uint8_t *)DEFAULT_GATEWAY_VALUE).toString();
         } else {
             sGW=IPAddress((const uint8_t *)gw_sav).toString();
         }
         //Subnet for static IP
-        if (!CONFIG::read_buffer(EP_MASK_VALUE,msk_sav , IP_LENGTH) ) {
+        if (!CONFIG::read_buffer(EP_STA_MASK_VALUE,msk_sav , IP_LENGTH) ) {
             sMask=IPAddress((const uint8_t *)DEFAULT_MASK_VALUE).toString();
         } else {
             sMask=IPAddress((const uint8_t *)msk_sav).toString();
@@ -1879,12 +1807,20 @@ void handle_web_interface_configSTA()
     KeysList.add(FPSTR(KEY_HOSTNAME));
     ValuesList.add(sHostname);
 
+    //Default mode ?
+    KeysList.add(FPSTR(KEY_IS_DEFAULT_MODE));
+    if (   default_mode==CLIENT_MODE) {
+        ValuesList.add(FPSTR(VALUE_CHECKED));
+    } else {
+        ValuesList.add("");
+    }
+
     //network
     ipos = 0;
     stmp="";
     while (inetworkvaluelist[ipos]>-1) {
         stmp+="<OPTION VALUE=\"";
-        stmp+= intTostr(inetworkvaluelist[ipos]);
+        stmp+= CONFIG::intTostr(inetworkvaluelist[ipos]);
         stmp+="\" ";
         if (inetworkvaluelist[ipos]==phy_mode_buf) {
             stmp+=FPSTR(VALUE_SELECTED);
@@ -1900,7 +1836,7 @@ void handle_web_interface_configSTA()
     //static IP ?
     KeysList.add(FPSTR(KEY_IS_STATIC_IP));
     if (static_ip_buf==STATIC_IP_MODE) {
-        ValuesList.add(VALUE_CHECKED);
+        ValuesList.add(FPSTR(VALUE_CHECKED));
     } else {
         ValuesList.add("");
     }
@@ -1920,7 +1856,7 @@ void handle_web_interface_configSTA()
     //do we need to do a scan and display it ?
     if (!msg_alert_success) {
         //if in AP mode switch to mixed mode to be able to scan
-        if (wifi_get_opmode()!=WIFI_STA ) {
+        if (WiFi.getMode()!=WIFI_STA ) {
             WiFi.mode(WIFI_AP_STA);
             revertSTA=true;
         }
@@ -1939,7 +1875,7 @@ void handle_web_interface_configSTA()
             //signal strength
             stmp = "$AP_SIGNAL["+String(i)+"]$";
             KeysList.add(stmp);
-            stmp = intTostr(100+WiFi.RSSI(i)) ;
+            stmp = CONFIG::intTostr(wifi_config.getSignal(WiFi.RSSI(i))) ;
             stmp += "%";
             ValuesList.add(stmp);
             //is protected
@@ -1953,26 +1889,26 @@ void handle_web_interface_configSTA()
         }
         WiFi.scanDelete();
         KeysList.add(FPSTR(KEY_AVAILABLE_AP_NB_ITEMS));
-        ValuesList.add(intTostr(n));
+        ValuesList.add(CONFIG::intTostr(n));
 
         //revert to pure softAP
         if (revertSTA) {
             WiFi.mode(WIFI_AP);
         }
         KeysList.add(FPSTR(KEY_AP_SCAN_VISIBILITY));
-        ValuesList.add(VALUE_ITEM_VISIBLE);
+        ValuesList.add(FPSTR(VALUE_ITEM_VISIBLE));
     } else {
         //no need to do a scan if we are going to restart
         KeysList.add(FPSTR(KEY_AP_SCAN_VISIBILITY));
-        ValuesList.add(VALUE_ITEM_HIDDEN);
+        ValuesList.add(FPSTR(VALUE_ITEM_HIDDEN));
         KeysList.add(FPSTR(KEY_AVAILABLE_AP_NB_ITEMS));
-        ValuesList.add(intTostr(0));
+        ValuesList.add(CONFIG::intTostr(0));
     }
 
     if (msg_alert_error) {
-        ProcessAlertError(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertError(KeysList, ValuesList, smsg);
     } else if (msg_alert_success) {
-        ProcessAlertSuccess(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertSuccess(KeysList, ValuesList, smsg);
         KeysList.add(FPSTR(KEY_SERVICE_PAGE));
         ValuesList.add(FPSTR(RESTARTCMD));
         //Add all green
@@ -1997,13 +1933,13 @@ void handle_web_interface_configSTA()
     else
 
     {
-        ProcessNoAlert(KeysList,ValuesList);
+        web_interface->ProcessNoAlert(KeysList,ValuesList);
     }
 
     //Firmware and Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
     //process the template file and provide list of variables
-    processTemplate("/config_sta.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/config_sta.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
@@ -2013,22 +1949,24 @@ void handle_web_interface_printer()
 {
     static const char NOT_AUTH_PRT [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /LOGIN?return=PRINTER\r\nCache-Control: no-cache\r\n\r\n";
 
-    bool msg_alert_error=false;
-    bool msg_alert_success=false;
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
 
-    if (!web_interface->is_authenticated()) {
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    if (auth_level == LEVEL_GUEST) {
         web_interface->WebServer.sendContent_P(NOT_AUTH_PRT);
         return;
     }
 
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,auth_level);
+
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
     //mode
-    GetMode(KeysList, ValuesList);
+    web_interface->GetMode(KeysList, ValuesList);
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_PRINTER),F("printer"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_PRINTER),F("printer"));
     //menu item
     KeysList.add(FPSTR(KEY_MENU_PRINTER));
     ValuesList.add(FPSTR(VALUE_ACTIVE));
@@ -2037,9 +1975,9 @@ void handle_web_interface_printer()
     KeysList.add(FPSTR(KEY_REFRESH_PAGE));
     byte bflag;
     if (!CONFIG::read_byte(EP_REFRESH_PAGE_TIME, &bflag )) {
-        ValuesList.add(intTostr(DEFAULT_REFRESH_PAGE_TIME*1000));
+        ValuesList.add(CONFIG::intTostr(DEFAULT_REFRESH_PAGE_TIME*1000));
     } else {
-        ValuesList.add(intTostr(1000*bflag));
+        ValuesList.add(CONFIG::intTostr(1000*bflag));
     }
     int istatus;
     //xy feedrate
@@ -2047,19 +1985,19 @@ void handle_web_interface_printer()
     if (!CONFIG::read_buffer(EP_XY_FEEDRATE,  (byte *)&istatus , INTEGER_LENGTH)) {
         istatus=DEFAULT_XY_FEEDRATE;
     }
-    ValuesList.add(intTostr(istatus));
+    ValuesList.add(CONFIG::intTostr(istatus));
     //Z feedrate
     KeysList.add(FPSTR(KEY_Z_FEEDRATE));
     if (!CONFIG::read_buffer(EP_Z_FEEDRATE,  (byte *)&istatus , INTEGER_LENGTH)) {
         istatus=DEFAULT_Z_FEEDRATE;
     }
-    ValuesList.add(intTostr(istatus));
+    ValuesList.add(CONFIG::intTostr(istatus));
     //E feedrate
     KeysList.add(FPSTR(KEY_E_FEEDRATE));
     if (!CONFIG::read_buffer(EP_E_FEEDRATE,  (byte *)&istatus , INTEGER_LENGTH)) {
         istatus=DEFAULT_E_FEEDRATE;
     }
-    ValuesList.add(intTostr(istatus));
+    ValuesList.add(CONFIG::intTostr(istatus));
 
     //Serial.println("M114");
     Serial.println(F("M220"));
@@ -2068,9 +2006,9 @@ void handle_web_interface_printer()
     ValuesList.add("");
 
     //Firmware and Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
 
-    processTemplate("/printer.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/printer.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
@@ -2081,26 +2019,28 @@ void handle_web_settings()
     static const char NOT_AUTH_SET [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /LOGIN?return=SETTINGS\r\nCache-Control: no-cache\r\n\r\n";
 
     String smsg;
-    int istatus;
-    byte bbuf;
+    //int istatus;
+    //byte bbuf;
     bool msg_alert_error=false;
     bool msg_alert_success=false;
     byte irefresh_page;
     int ixy_feedrate,iz_feedrate,ie_feedrate;
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
-
-    if (!web_interface->is_authenticated()) {
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    if (auth_level == LEVEL_GUEST) {
         web_interface->WebServer.sendContent_P(NOT_AUTH_SET);
         return;
     }
-
+    web_interface->blockserial = false;
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,auth_level);
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
     //mode
-    GetMode(KeysList, ValuesList);
+    web_interface->GetMode(KeysList, ValuesList);
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_SETTINGS),F("settings"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_SETTINGS),F("settings"));
     //menu item
     KeysList.add(FPSTR(KEY_MENU_SETTINGS));
     ValuesList.add(FPSTR(VALUE_ACTIVE));
@@ -2115,7 +2055,7 @@ void handle_web_settings()
             iz_feedrate  = web_interface->WebServer.arg("Z_FEEDRATE").toInt();
             ie_feedrate = web_interface->WebServer.arg("E_FEEDRATE").toInt();
 
-            if (!(irefresh_page>1 && irefresh_page<120)) {
+            if (!(irefresh_page>=0 && irefresh_page<120)) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: invalid value for refresh time<BR>"));
                 KeysList.add(FPSTR(KEY_REFRESH_PAGE_STATUS));
@@ -2170,21 +2110,21 @@ void handle_web_settings()
     //fill the variables
     //refresh page
     KeysList.add(FPSTR(KEY_REFRESH_PAGE));
-    ValuesList.add(intTostr(irefresh_page));
+    ValuesList.add(CONFIG::intTostr(irefresh_page));
     //xy feedrate
     KeysList.add(FPSTR(KEY_XY_FEEDRATE));
-    ValuesList.add(intTostr(ixy_feedrate));
+    ValuesList.add(CONFIG::intTostr(ixy_feedrate));
     //Z feedrate
     KeysList.add(FPSTR(KEY_Z_FEEDRATE));
-    ValuesList.add(intTostr(iz_feedrate));
+    ValuesList.add(CONFIG::intTostr(iz_feedrate));
     //E feedrate
     KeysList.add(FPSTR(KEY_E_FEEDRATE));
-    ValuesList.add(intTostr(ie_feedrate));
+    ValuesList.add(CONFIG::intTostr(ie_feedrate));
 
     if (msg_alert_error) {
-        ProcessAlertError(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertError(KeysList, ValuesList, smsg);
     } else if (msg_alert_success) {
-        ProcessAlertSuccess(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertSuccess(KeysList, ValuesList, smsg);
         KeysList.add(FPSTR(KEY_SERVICE_PAGE));
         ValuesList.add("");
         KeysList.add(FPSTR(KEY_REFRESH_PAGE_STATUS));
@@ -2200,14 +2140,14 @@ void handle_web_settings()
     }
 
     else {
-        ProcessNoAlert(KeysList,ValuesList);
+        web_interface->ProcessNoAlert(KeysList,ValuesList);
     }
 
     //Firmware and Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
 
     //process the template file and provide list of variables
-    processTemplate("/settings.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/settings.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
@@ -2216,34 +2156,25 @@ void handle_web_settings()
 void handle_web_interface_status()
 {
     static const char NO_TEMP_LINE[] PROGMEM = "\"temperature\":\"0\",\"target\":\"0\",\"active\":\"0\"";
+    //we do not care if need authentication - just reset counter
     web_interface->is_authenticated();
+#ifdef POS_MONITORING_FEATURE
     Serial.println(F("M114"));
+#endif
     int tagpos,tagpos2;
     String buffer2send;
     String value;
-    int temperature,target;
-
-    //request temperature only if no feedback
-    if ((system_get_time()-web_interface->last_temp)>2000000) {
-        Serial.println(F("M105"));
-    }
-
-    if ((system_get_time()-web_interface->last_temp)<3200000) {
-        value="Connected";
-    } else if ((system_get_time()-web_interface->last_temp)<32000000) {
-        value="Busy";
-    } else {
-        value="Offline";
-    }
-
     //start JSON answer
     buffer2send="{";
-    //status color
-    buffer2send+="\"status\":\""+value +"\",";
+#ifdef SPEED_MONITORING_FEATURE
     //speed
     buffer2send+="\"speed\":\""+web_interface->answer4M220 +"\",";
+#endif
+#ifdef FLOW_MONITORING_FEATURE
     //flow
     buffer2send+="\"flow\":\""+web_interface->answer4M221 +"\",";
+#endif
+#ifdef POS_MONITORING_FEATURE
     //X position
     tagpos = web_interface->answer4M114.indexOf("X:");
     tagpos2 = web_interface->answer4M114.indexOf(" ",tagpos);
@@ -2259,6 +2190,8 @@ void handle_web_interface_status()
     tagpos2 = web_interface->answer4M114.indexOf(" ",tagpos);
     value=web_interface->answer4M114.substring(tagpos+2,tagpos2);
     buffer2send+="\"Zpos\":\""+value +"\",";
+#endif
+#ifdef TEMP_MONITORING_FEATURE
     //heater
     buffer2send.concat(F("\"heater\":["));
     //Extruder 1
@@ -2304,8 +2237,8 @@ void handle_web_interface_status()
         slashpos = web_interface->answer4M105.indexOf(" /",Tpos);
         spacepos = web_interface->answer4M105.indexOf(" ",slashpos+2);
         if(slashpos!=-1 && spacepos!=-1 ) {
-            temperature = (int)atof(web_interface->answer4M105.substring(Tpos+2,slashpos).c_str());
-            target = (int)atof(web_interface->answer4M105.substring(slashpos+2,spacepos).c_str());
+            //temperature = (int)atof(web_interface->answer4M105.substring(Tpos+2,slashpos).c_str());
+            //target = (int)atof(web_interface->answer4M105.substring(slashpos+2,spacepos).c_str());
             buffer2send += "\"temperature\":\""+web_interface->answer4M105.substring(Tpos+2,slashpos)+
                            "\",\"target\":\""+web_interface->answer4M105.substring(slashpos+2,spacepos)+"\",\"active\":\"1\"";
         } else { //no extruder temperature
@@ -2316,9 +2249,11 @@ void handle_web_interface_status()
     }
     buffer2send+="}";
     buffer2send+="],";
-
+#endif
+#ifdef INFO_MSG_FEATURE
     //information
     buffer2send.concat(F("\"InformationMsg\":["));
+
     for (int i=0; i<web_interface->info_msg.size(); i++) {
         if (i>0) {
             buffer2send+=",";
@@ -2328,6 +2263,8 @@ void handle_web_interface_status()
         buffer2send+="\"}";
     }
     buffer2send+="],";
+#endif
+#ifdef ERROR_MSG_FEATURE
     //Error
     buffer2send.concat(F("\"ErrorMsg\":["));
     for (int i=0; i<web_interface->error_msg.size(); i++) {
@@ -2339,8 +2276,11 @@ void handle_web_interface_status()
         buffer2send+="\"}";
     }
     buffer2send+="],";
+#endif
+#ifdef STATUS_MSG_FEATURE
     //Status
     buffer2send.concat(F("\"StatusMsg\":["));
+
     for (int i=0; i<web_interface->status_msg.size(); i++) {
         if (i>0) {
             buffer2send+=",";
@@ -2349,113 +2289,437 @@ void handle_web_interface_status()
         buffer2send+=web_interface->status_msg.get(i);
         buffer2send+="\"}";
     }
-    buffer2send+="]";
+    buffer2send+="],";
+#endif
+#ifdef TEMP_MONITORING_FEATURE
+    //request temperature only if no feedback
+    if ((millis()-web_interface->last_temp)>2000) {
+        Serial.println(F("M105"));
+    }
+    if ((millis()-web_interface->last_temp)<30000) {
+        value="Connected";
+    } else if ((millis()-web_interface->last_temp)<60000) {
+        value="Busy";
+    } else {
+        value="Offline";
+    }
+#endif
+    //status color
+    buffer2send+="\"status\":\""+value +"\"";
     buffer2send+="}";
     web_interface->WebServer.sendHeader("Cache-Control", "no-cache");
     web_interface->WebServer.send(200, "application/json",buffer2send);
 }
 
-String formatBytes(size_t bytes)
-{
-    if (bytes < 1024) {
-        return String(bytes)+" B";
-    } else if(bytes < (1024 * 1024)) {
-        return String(bytes/1024.0)+" KB";
-    } else if(bytes < (1024 * 1024 * 1024)) {
-        return String(bytes/1024.0/1024.0)+" MB";
-    } else {
-        return String(bytes/1024.0/1024.0/1024.0)+" GB";
-    }
-}
-
-String getContentType(String filename)
-{
-    if(filename.endsWith(".htm")) {
-        return "text/html";
-    } else if(filename.endsWith(".html")) {
-        return "text/html";
-    } else if(filename.endsWith(".css")) {
-        return "text/css";
-    } else if(filename.endsWith(".js")) {
-        return "application/javascript";
-    } else if(filename.endsWith(".png")) {
-        return "image/png";
-    } else if(filename.endsWith(".gif")) {
-        return "image/gif";
-    } else if(filename.endsWith(".jpg")) {
-        return "image/jpeg";
-    } else if(filename.endsWith(".ico")) {
-        return "image/x-icon";
-    } else if(filename.endsWith(".xml")) {
-        return "text/xml";
-    } else if(filename.endsWith(".pdf")) {
-        return "application/x-pdf";
-    } else if(filename.endsWith(".zip")) {
-        return "application/x-zip";
-    } else if(filename.endsWith(".gz")) {
-        return "application/x-gzip";
-    } else if(filename.endsWith(".tpl")) {
-        return "text/plain";
-    } else if(filename.endsWith(".inc")) {
-        return "text/plain";
-    } else if(filename.endsWith(".txt")) {
-        return "text/plain";
-    }
-    return "application/octet-stream";
-}
 
 void SPIFFSFileupload()
 {
+    //get authentication status
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    //Guest cannot upload
+    if (auth_level == LEVEL_GUEST) {
+        web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+        Serial.println("M117 Error ESP upload");
+        return;
+    }
+    //get current file ID
     HTTPUpload& upload = (web_interface->WebServer).upload();
+    //Upload start
+    //**************
     if(upload.status == UPLOAD_FILE_START) {
-        String filename = upload.filename;
+        String filename;
+        //according User or Admin the root is different as user is isolate to /user when admin has full access
+        if(auth_level == LEVEL_ADMIN) {
+            filename = upload.filename;
+        } else {
+            filename = "/user" + upload.filename;
+        }
+        Serial.println("M117 Start ESP upload");
+        //create file
         web_interface->fsUploadFile = SPIFFS.open(filename, "w");
         filename = String();
+        //check If creation succeed
+        if (web_interface->fsUploadFile) {
+            //if yes upload is started
+            web_interface->_upload_status= UPLOAD_STATUS_ONGOING;
+        } else {
+            //if no set cancel flag
+            web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+            Serial.println("M117 Error ESP create");
+        }
+        //Upload write
+        //**************
     } else if(upload.status == UPLOAD_FILE_WRITE) {
-        if(web_interface->fsUploadFile) {
+        //check if file is available and no error
+        if(web_interface->fsUploadFile && web_interface->_upload_status == UPLOAD_STATUS_ONGOING) {
+            //no error so write post date
             web_interface->fsUploadFile.write(upload.buf, upload.currentSize);
+        } else {
+            //we have a proble set flag UPLOAD_STATUS_CANCELLED
+            web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+            Serial.println("M117 Error ESP write");
         }
+        //Upload end
+        //**************
     } else if(upload.status == UPLOAD_FILE_END) {
+        Serial.println("M117 End ESP upload");
+        //check if file is still open
         if(web_interface->fsUploadFile) {
+            //close it
             web_interface->fsUploadFile.close();
+            web_interface->_upload_status=UPLOAD_STATUS_SUCCESSFUL;
+        } else {
+            //we have a proble set flag UPLOAD_STATUS_CANCELLED
+            web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+            Serial.println("M117 Error ESP close");
         }
+        //Upload cancelled
+        //**************
     } else {
-        Serial.println("Cannot open file");
+        web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+        Serial.println("M117 Error ESP upload");
+    }
+    delay(0);
+}
+
+#define NB_RETRY 5
+#define MAX_RESEND_BUFFER 128
+
+void SDFileupload()
+{
+    static char buffer_line[MAX_RESEND_BUFFER]; //if need to resend
+    static char previous = 0;
+    static int  buffer_size;
+    static bool com_error = false;
+    static bool is_comment = false;
+    String response;
+    //Guest cannot upload - only admin and user
+    if(web_interface->is_authenticated() == LEVEL_GUEST) {
+        web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+        Serial.println("M117 SD upload failed");
+        LOG("SD upload failed\n");
+        return;
+    }
+    //retrieve current file id
+    HTTPUpload& upload = (web_interface->WebServer).upload();
+    //Upload start
+    //**************
+    if(upload.status == UPLOAD_FILE_START) {
+        //need to lock serial out to avoid garbage in file
+        (web_interface->blockserial) = true;
+        //init flags
+        buffer_size=0;
+        com_error = false;
+        is_comment = false;
+        previous = 0;
+        web_interface->_upload_status= UPLOAD_STATUS_ONGOING;
+        Serial.println("M117 Uploading...");
+        LOG(String(upload.filename));
+        LOG("\n");
+        //command to pritnter to start print
+        String filename = "M28 " + upload.filename;
+        Serial.println(filename);
+        Serial.flush();
+        //now need to purge all serial data
+        //let's sleep 1s
+        delay(1000);
+        for (int retry=0; retry < 400; retry++) { //time out is  5x400ms = 2000ms
+            //if there is something in serial buffer
+            if(Serial.available()) {
+                //get size of buffer
+                size_t len = Serial.available();
+                uint8_t sbuf[len+1];
+                //read buffer
+                Serial.readBytes(sbuf, len);
+                //convert buffer to zero end array
+                sbuf[len]='\0';
+                //use string because easier to handle
+                response = (const char*)sbuf;
+                //if there is a wait it means purge is done
+                if (response.indexOf("wait")>-1) {
+                    break;
+                }
+            }
+            delay(5);
+        }
+        //Upload write
+        //**************
+        //upload is on going with data coming by 2K blocks
+    } else if((upload.status == UPLOAD_FILE_WRITE) && (com_error == false)) { //if com error no need to send more data to serial
+        web_interface->_upload_status= UPLOAD_STATUS_ONGOING;
+        for (int pos = 0; pos < upload.currentSize; pos++) { //parse full post data
+            if (buffer_size < MAX_RESEND_BUFFER-1) { //raise error/handle if overbuffer - copy is space available
+                //remove/ignore every comment to save transfert time and avoid over buffer issues
+                if (upload.buf[pos] == ';') {
+                    is_comment = true;
+                    previous = ';';
+                }
+                if (!is_comment) {
+                    buffer_line[buffer_size] = upload.buf[pos]; //copy current char to buffer to send/resend
+                    buffer_size++;
+                    //convert buffer to zero end array
+                    buffer_line[buffer_size] = '\0';
+                    //check it is not an end line char and line is not empty
+                    if (((buffer_line[0] == '\n') && (buffer_size==1)) ||((buffer_line[1] == '\n') && (buffer_line[0] == '\r') && (buffer_size==2)) || ((buffer_line[0] == ' ') && (buffer_size==1)) ) {
+                        //ignore empty line
+                        buffer_size=0;
+                        buffer_line[buffer_size] = '\0';
+                    }
+                    //line is not empty so check if last char is an end line
+                    //if error no need to proceed
+                    else if (((buffer_line[buffer_size-1] == '\n')) && (com_error == false)) { //end of line and no error
+                        //if resend use buffer
+                        bool success = false;
+
+                        //check NB_RETRY times if get no error when send line
+                        for (int r = 0 ; r < NB_RETRY ; r++) {
+                            response = "";
+                            //print out line
+                            Serial.print(buffer_line);
+                            LOG(buffer_line);
+                            //ensure buffer is empty before continuing
+                            Serial.flush();
+                            //wait for answer with time out
+                            for (int retry=0; retry < 30; retry++) { //time out 30x5ms = 150ms
+                                //if there is serial data
+                                if(Serial.available()) {
+                                    //get size of available data
+                                    size_t len = Serial.available();
+                                    uint8_t sbuf[len+1];
+                                    //read serial buffer
+                                    Serial.readBytes(sbuf, len);
+                                    //convert buffer in zero end array
+                                    sbuf[len]='\0';
+                                    //use string because easier
+                                    response = (const char*)sbuf;
+                                    LOG("Retry:");
+                                    LOG(String(retry));
+                                    LOG("\n");
+                                    LOG(response);
+                                    //if buffer contain ok or wait - it means command is pass
+                                    if ((response.indexOf("wait")>-1)||(response.indexOf("ok")>-1)) {
+                                        success = true;
+                                        break;
+                                    }
+                                    //if buffer contain resend then need to resend
+                                    if (response.indexOf("Resend") > -1) { //if error
+                                        success = false;
+                                        break;
+                                    }
+                                }
+                                delay(5);
+                            }
+                            //if command is pass no need to retry
+                            if (success == true) {
+                                break;
+                            }
+                            //purge extra serial if any
+                            if(Serial.available()) {
+                                //get size of available data
+                                size_t len = Serial.available();
+                                uint8_t sbuf[len+1];
+                                //read serial buffer
+                                Serial.readBytes(sbuf, len);
+                                //convert buffer in zero end array
+                                sbuf[len]='\0';
+                            }
+                        }
+                        //if even after the number of retry still have error - then we are in error
+                        if (!success) {
+                            //raise error
+                            LOG("Error detected\n");
+                            LOG(response);
+                            com_error = true;
+                        }
+                        //reset buffer for next command
+                        buffer_size = 0;
+                        buffer_line[buffer_size] = '\0';
+                    }
+                } else { //it is a comment
+                    if (upload.buf[pos] == '\r') { //store if CR
+                        previous = '\r';
+                    } else if (upload.buf[pos] == '\n') { //this is the end of the comment
+                        is_comment = false;
+                        if (buffer_size > 0) {
+                            if (previous == '\r') {
+                                pos--;
+                            }
+                            pos--; //do a loop back and process as normal
+                        }
+                        previous = '\n';
+                    }//if not just ignore and continue
+                    else {
+                        previous = upload.buf[pos];
+                    }
+
+                }
+            } else { //raise error
+                LOG("\nlong line detected\n");
+                LOG(buffer_line);
+                com_error = true;
+            }
+        }
+        //Upload end
+        //**************
+    } else if(upload.status == UPLOAD_FILE_END) {
+        if (buffer_size > 0) { //if last part does not have '\n'
+            //print the line
+            Serial.print(buffer_line);
+            if (is_comment && (previous == '\r')) {
+                Serial.print("\r\n");
+            } else {
+                Serial.print("\n");
+            }
+            Serial.flush();
+            //if resend use buffer
+            bool success = false;
+            //check NB_RETRY times if get no error when send line
+            for (int r = 0 ; r < NB_RETRY ; r++) {
+                response = "";
+                Serial.print(buffer_line);
+                Serial.flush();
+                //wait for answer with time out
+                for (int retry=0; retry < 20; retry++) { //time out
+                    if(Serial.available()) {
+                        size_t len = Serial.available();
+                        uint8_t sbuf[len+1];
+                        Serial.readBytes(sbuf, len);
+                        sbuf[len]='\0';
+                        response = (const char*)sbuf;
+                        if ((response.indexOf("wait")>-1)||(response.indexOf("ok")>-1)) {
+                            success = true;
+                            break;
+                        }
+                        if (response.indexOf("Resend") > -1) { //if error
+                            success = false;
+                            break;
+                        }
+                    }
+                    delay(5);
+                }
+                if (success == true) {
+                    break;
+                }
+            }
+            if (!success) {
+                //raise error
+                LOG("Error detected 2\n");
+                LOG(response);
+                com_error = true;
+            }
+            //reset buffer for next command
+            buffer_size = 0;
+            buffer_line[buffer_size] = '\0';
+
+        }
+        LOG("Upload finished ");
+        buffer_size=0;
+        buffer_line[buffer_size] = '\0';
+        //send M29 command to close file on SD
+        Serial.print("\r\nM29\r\n");
+        Serial.flush();
+        web_interface->blockserial = false;
+        delay(1000);//give time to FW
+        //resend M29 command to close file on SD as first command may be lost
+        Serial.print("\r\nM29\r\n");
+        Serial.flush();
+        if (com_error) {
+            LOG("with error\n");
+            web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+            Serial.println("M117 SD upload failed");
+            Serial.flush();
+        } else {
+            LOG("with success\n");
+            web_interface->_upload_status=UPLOAD_STATUS_SUCCESSFUL;
+            Serial.println("M117 SD upload done");
+            Serial.flush();
+        }
+        //Upload cancelled
+        //**************
+    } else { //UPLOAD_FILE_ABORTED
+        LOG("Error, Something happened\n");
+        com_error = true;
+        web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+        buffer_size=0;
+        buffer_line[buffer_size] = '\0';
+        //send M29 command to close file on SD
+        Serial.print("\r\nM29\r\n");
+        Serial.flush();
+        web_interface->blockserial = false;
+        delay(1000);
+        //resend M29 command to close file on SD as first command may be lost
+        Serial.print("\r\nM29\r\n");
+        Serial.flush();
+        Serial.println("M117 SD upload failed");
+        Serial.flush();
     }
 }
 
 #ifdef WEB_UPDATE_FEATURE
 void WebUpdateUpload()
 {
+    static size_t last_upload_update;
+    static uint32_t maxSketchSpace ;
+    //only admin can update FW
+    if(web_interface->is_authenticated() != LEVEL_ADMIN) {
+        web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+        Serial.println("M117 Update failed");
+        LOG("SD Update failed\n");
+        return;
+    }
+    //get current file ID
     HTTPUpload& upload = (web_interface->WebServer).upload();
+    //Upload start
+    //**************
     if(upload.status == UPLOAD_FILE_START) {
         Serial.println(F("M117 Update Firmware"));
         web_interface->_upload_status= UPLOAD_STATUS_ONGOING;
         WiFiUDP::stopAll();
-        uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+        maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+        last_upload_update = 0;
         if(!Update.begin(maxSketchSpace)) { //start with max available size
+            web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+        } else {
+            Serial.println(F("M117 Update 0%"));
         }
+        //Upload write
+        //**************
     } else if(upload.status == UPLOAD_FILE_WRITE) {
-        web_interface->_upload_status= UPLOAD_STATUS_ONGOING;
-        if(Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        //check if no error
+        if (web_interface->_upload_status == UPLOAD_STATUS_ONGOING) {
+            //we do not know the total file size yet but we know the available space so let's use it
+            if ( ((100 * upload.totalSize) / maxSketchSpace) !=last_upload_update) {
+                last_upload_update = (100 * upload.totalSize) / maxSketchSpace;
+                Serial.print(F("M117 Update "));
+                Serial.print(last_upload_update);
+                Serial.println(F("%"));
+            }
+            if(Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
+            }
         }
+        //Upload end
+        //**************
     } else if(upload.status == UPLOAD_FILE_END) {
         if(Update.end(true)) { //true to set the size to the current progress
             //Now Reboot
+            Serial.println(F("M117 Update 100%"));
             web_interface->_upload_status=UPLOAD_STATUS_SUCCESSFUL;
         }
     } else if(upload.status == UPLOAD_FILE_ABORTED) {
+        Serial.println(F("M117 Update Failed"));
         Update.end();
         web_interface->_upload_status=UPLOAD_STATUS_CANCELLED;
     }
-    yield();
+    delay(0);
 }
 
 void handleUpdate()
 {
+    //upload can be long so better to reset time out
     web_interface->is_authenticated();
     String jsonfile = "{\"status\":\"" ;
-    jsonfile+=intTostr(web_interface->_upload_status);
+    jsonfile+=CONFIG::intTostr(web_interface->_upload_status);
     jsonfile+="\"}";
     //send status
     web_interface->WebServer.sendHeader("Cache-Control", "no-cache");
@@ -2469,51 +2733,167 @@ void handleUpdate()
 
 void handleFileList()
 {
-    if (!web_interface->is_authenticated()) {
+    level_authenticate_type auth_level = web_interface->is_authenticated();
+    if (auth_level == LEVEL_GUEST) {
         return;
     }
-    String path = "/";
-    String status="Ok";
-
+    String path ;
+    String status = "Ok";
+    //be sure root is correct according authentication
+    if (auth_level == LEVEL_ADMIN) {
+        path = "/";
+    } else {
+        path = "/user";
+    }
+    //get current path
+    if(web_interface->WebServer.hasArg("path")) {
+        path += web_interface->WebServer.arg("path") ;
+    }
+    //to have a clean path
+    path.trim();
+    path.replace("//","/");
+    if (path[path.length()-1] !='/') {
+        path +="/";
+    }
+    //check if query need some action
     if(web_interface->WebServer.hasArg("action")) {
-        if(web_interface->WebServer.arg("action")=="delete" && web_interface->WebServer.hasArg("filename")) {
+        //delete a file
+        if(web_interface->WebServer.arg("action") == "delete" && web_interface->WebServer.hasArg("filename")) {
             String filename;
-            web_interface->urldecode(filename,web_interface->WebServer.arg("filename").c_str());
+            String shortname = web_interface->WebServer.arg("filename");
+            shortname.replace("/","");
+            filename = path + web_interface->WebServer.arg("filename");
+            filename.replace("//","/");
             if(!SPIFFS.exists(filename)) {
-                status="Cannot delete, file not found!";
+                status = shortname + F(" does not exists!");
             } else {
-                SPIFFS.remove(filename);
+                if (SPIFFS.remove(filename)) {
+                    status = shortname + F(" deleted");
+                    //what happen if no "/." and no other subfiles ?
+                    FSDIR dir = SPIFFS.openDir(path);
+                    if (!dir.next()) {
+                        //keep directory alive even empty
+                        FSFILE r = SPIFFS.open(path+"/.","w");
+                        if (r) {
+                            r.close();
+                        }
+                    }
+                } else {
+                    status = F("Cannot deleted ") ;
+                    status+=shortname ;
+                }
+            }
+        }
+        //delete a directory
+        if(web_interface->WebServer.arg("action") == "deletedir" && web_interface->WebServer.hasArg("filename")) {
+            String filename;
+            String shortname = web_interface->WebServer.arg("filename");
+            shortname.replace("/","");
+            filename = path + web_interface->WebServer.arg("filename");
+            filename += "/.";
+            filename.replace("//","/");
+            if (filename != "/") {
+                bool delete_error = false;
+                FSDIR dir = SPIFFS.openDir(path + shortname);
+                {
+                    while (dir.next()) {
+                        String fullpath = dir.fileName();
+                        if (!SPIFFS.remove(dir.fileName())) {
+                            delete_error = true;
+                            status = F("Cannot deleted ") ;
+                            status+=fullpath;
+                        }
+                    }
+                }
+                if (!delete_error) {
+                    status = shortname ;
+                    status+=" deleted";
+                }
+            }
+        }
+        //create a directory
+        if(web_interface->WebServer.arg("action")=="createdir" && web_interface->WebServer.hasArg("filename")) {
+            String filename;
+            filename = path + web_interface->WebServer.arg("filename") +"/.";
+            String shortname = web_interface->WebServer.arg("filename");
+            shortname.replace("/","");
+            filename.replace("//","/");
+            if(SPIFFS.exists(filename)) {
+                status = shortname + F(" already exists!");
+            } else {
+                FSFILE r = SPIFFS.open(filename,"w");
+                if (!r) {
+                    status = F("Cannot create ");
+                    status += shortname ;
+                } else {
+                    r.close();
+                    status = shortname + F(" created");
+                }
             }
         }
     }
-    String jsonfile = "{\"path\":\"" + path + "\",";
-    Dir dir = SPIFFS.openDir(path);
+    String jsonfile = "{";
+    FSDIR dir = SPIFFS.openDir(path);
     jsonfile+="\"files\":[";
     bool firstentry=true;
+    String subdirlist="";
     while (dir.next()) {
-        if (!firstentry) {
-            jsonfile+=",";
+        String filename = dir.fileName();
+        String size ="";
+        bool addtolist=true;
+        //remove path from name
+        filename = filename.substring(path.length(),filename.length());
+        //check if file or subfile
+        if (filename.indexOf("/")>-1) {
+            //Do not rely on "/." to define directory as SPIFFS upload won't create it but directly files
+            //and no need to overload SPIFFS if not necessary to create "/." if no need
+            //it will reduce SPIFFS available space so limit it to creation
+            filename = filename.substring(0,filename.indexOf("/"));
+            String tag="*";
+            tag = filename + "*";
+            if (subdirlist.indexOf(tag)>-1) { //already in list
+                addtolist = false; //no need to add
+            } else {
+                size = -1; //it is subfile so display only directory, size will be -1 to describe it is directory
+                if (subdirlist.length()==0) {
+                    subdirlist+="*";
+                }
+                subdirlist += filename + "*"; //add to list
+            }
         } else {
-            firstentry=false;
+            //do not add "." file
+            if (filename!=".") {
+                FSFILE f = dir.openFile("r");
+                size = CONFIG::formatBytes(f.size());
+                f.close();
+            } else {
+                addtolist = false;
+            }
         }
-        jsonfile+="{";
-        jsonfile+="\"name\":\"";
-        jsonfile+=dir.fileName();
-        jsonfile+="\",\"size\":\"";
-        File f = dir.openFile("r");
-        jsonfile+=formatBytes(f.size());
-        jsonfile+="\"";
-        jsonfile+="}";
-        f.close();
+        if(addtolist) {
+            if (!firstentry) {
+                jsonfile+=",";
+            } else {
+                firstentry=false;
+            }
+            jsonfile+="{";
+            jsonfile+="\"name\":\"";
+            jsonfile+=filename;
+            jsonfile+="\",\"size\":\"";
+            jsonfile+=size;
+            jsonfile+="\"";
+            jsonfile+="}";
+        }
     }
     jsonfile+="],";
+    jsonfile+="\"path\":\"" + path + "\",";
     jsonfile+="\"status\":\"" + status + "\",";
-    FSInfo info;
+    FSINFO info;
     SPIFFS.info(info);
-    jsonfile+="\"total\":\"" + formatBytes(info.totalBytes) + "\",";
-    jsonfile+="\"used\":\"" + formatBytes(info.usedBytes) + "\",";
+    jsonfile+="\"total\":\"" + CONFIG::formatBytes(info.totalBytes) + "\",";
+    jsonfile+="\"used\":\"" + CONFIG::formatBytes(info.usedBytes) + "\",";
     jsonfile.concat(F("\"occupation\":\""));
-    jsonfile+= intTostr(100*info.usedBytes/info.totalBytes);
+    jsonfile+= CONFIG::intTostr(100*info.usedBytes/info.totalBytes);
     jsonfile+="\"";
     jsonfile+="}";
     path = "";
@@ -2523,21 +2903,155 @@ void handleFileList()
 
 void handleSDFileList()
 {
-    if (!web_interface->is_authenticated()) {
+    char tmp[255];
+    if (web_interface->is_authenticated() == LEVEL_GUEST) {
         return;
     }
-    String jsonfile = "[";
-    for (int i=0; i<web_interface->fileslist.size(); i++) {
-        if (i>0) {
-            jsonfile+=",";
-        }
-        jsonfile+="{\"entry\":\"";
-        jsonfile+=web_interface->fileslist.get(i);
-        jsonfile+="\"}";
+    LOG("List SD FILES\n")
+    String path="/";
+    String sstatus="Ok";
+    uint32_t totalspace = 0;
+    uint32_t usedspace = 0;
+    //get current path
+    if(web_interface->WebServer.hasArg("path")) {
+        path += web_interface->WebServer.arg("path") ;
     }
-    jsonfile+="]";
+    //to have a clean path
+    path.trim();
+    path.replace("//","/");
+    if (path[path.length()-1] !='/') {
+        path +="/";
+    }
+    //check if query need some action
+    if(web_interface->WebServer.hasArg("action")) {
+        LOG("action requested\n")
+        //delete a file
+        if(web_interface->WebServer.arg("action") == "delete" && web_interface->WebServer.hasArg("filename")) {
+            LOG("delete requested\n")
+            String filename;
+            String shortname = web_interface->WebServer.arg("filename");
+            shortname.replace("/","");
+            filename = path + web_interface->WebServer.arg("filename");
+            filename.replace("//","/");
+            LOG(shortname)
+            LOG("\n")
+            LOG(filename)
+            LOG("\n")
+            LOG(sstatus)
+            LOG("\n")
+        }
+        //delete a directory
+        if(web_interface->WebServer.arg("action") == "deletedir" && web_interface->WebServer.hasArg("filename")) {
+            LOG("deletedir requested\n")
+            String filename;
+            String shortname = web_interface->WebServer.arg("filename");
+            shortname.replace("/","");
+            filename = path + web_interface->WebServer.arg("filename");
+            filename.replace("//","/");
+            LOG(shortname)
+            LOG("\n")
+            LOG(filename)
+            LOG("\n")
+            LOG(sstatus)
+            LOG("\n")
+        }
+        //create a directory
+        if(web_interface->WebServer.arg("action")=="createdir" && web_interface->WebServer.hasArg("filename")) {
+            String filename;
+            LOG("createdir requested\n")
+            filename = path + web_interface->WebServer.arg("filename") ;
+            String shortname = web_interface->WebServer.arg("filename");
+            shortname.replace("/","");
+            filename.replace("//","/");
+            LOG(shortname)
+            LOG("\n")
+            LOG(filename)
+            LOG("\n")
+            LOG(sstatus)
+            LOG("\n")
+        }
+    }
+
+    String jsonfile = "{" ;
+#ifndef DIRECT_SDCARD_FEATURE
+    //if action is processing do not build list, but no need Serial for Direct SDCard Support
+    if ((web_interface->blockserial)) {
+        LOG("Wait, blocking\n");
+        jsonfile+="\"status\":\"processing\",\"mode\":\"serial\"}";
+    } else
+#endif
+    {
+        jsonfile+="\"files\":[";
+        LOG("No Blocking \n");
+        LOG("JSON File\n");
+        LOG(String(web_interface->fileslist.size()));
+        LOG(" entries\n");
+        String sname;
+        for (int i=0; i<web_interface->fileslist.size(); i++) {
+            if (i>0) {
+                jsonfile+=",";
+            }
+            jsonfile+="{\"name\":\"";
+            sname = web_interface->fileslist.get(i);
+#if FIRMWARE_TARGET == REPETIER4DV || FIRMWARE_TARGET == REPETIER
+            //check if directory or file
+            if (sname[0] == '/' || sname[sname.length()-1]=='/') {
+                jsonfile+=sname;
+                jsonfile+="\",\"size\":\"";
+                LOG(String(i+1));
+                LOG(sname);
+                jsonfile+="-1";
+                LOG(" -1");
+            } else { //it is a file
+                //get size position
+                int posspace = sname.indexOf(" ");
+                String ssize;
+                if (posspace !=-1) {
+                    ssize = sname.substring(posspace+1);
+                    sname = sname.substring(0,posspace);
+                }
+                jsonfile+=sname;
+                jsonfile+="\",\"size\":\"";
+                LOG(String(i+1));
+                LOG(sname);
+                LOG(" ");
+                jsonfile+=CONFIG::formatBytes(ssize.toInt());
+                LOG( CONFIG::formatBytes(ssize.toInt()));
+            }
+#endif
+#if FIRMWARE_TARGET == MARLIN || FIRMWARE_TARGET == MARLINKIMBRA || FIRMWARE_TARGET == SMOOTHIEWARE
+            jsonfile+=sname;
+            jsonfile+="\",\"size\":\"";
+            LOG(String(i+1));
+            LOG(sname);
+            if (sname[0] == '/' || sname[sname.length()-1]=='/') {
+                jsonfile+="-1";
+                LOG(" -1");
+            } else {
+                //nothing to add
+                jsonfile+="";
+            }
+            LOG("\n");
+#endif
+            jsonfile+="\"}";
+        }
+        jsonfile+="],\"path\":\"";
+        jsonfile+=path + "\",\"mode\":\"serial\",\"status\":\"";
+        jsonfile+=sstatus + "\",\"total\":\"";
+        jsonfile+= "-1";
+        jsonfile+="\",\"used\":\"";
+        jsonfile+= "-1";
+        jsonfile+="\",\"occupation\":\"";
+        jsonfile+=  "-1";
+        jsonfile+= "\"";
+        jsonfile+= "}";
+
+        LOG("JSON done\n");
+    }
+    path = String();
     web_interface->WebServer.sendHeader("Cache-Control", "no-cache");
     web_interface->WebServer.send(200, "application/json", jsonfile);
+    web_interface->blockserial = false;
 }
 
 //do a redirect to avoid to many query
@@ -2546,39 +3060,51 @@ void handle_not_found()
 {
     static const char NOT_AUTH_NF [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /HOME\r\nCache-Control: no-cache\r\n\r\n";
 
-    if (!web_interface->is_authenticated()) {
+    if (web_interface->is_authenticated() == LEVEL_GUEST) {
         web_interface->WebServer.sendContent_P(NOT_AUTH_NF);
         return;
     }
-
-    String path = web_interface->WebServer.uri();
-    String contentType = getContentType(path);
+    bool page_not_found = false;
+    String path = web_interface->WebServer.urlDecode(web_interface->WebServer.uri());
+    String contentType =  web_interface->getContentType(path);
     String pathWithGz = path + ".gz";
+    LOG("request:")
+    LOG(path)
+    LOG("\n")
+    LOG("type:")
+    LOG(contentType)
+    LOG("\n")
     if(SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) {
         if(SPIFFS.exists(pathWithGz)) {
             path = pathWithGz;
         }
-        File file = SPIFFS.open(path, "r");
+        FSFILE file = SPIFFS.open(path, "r");
         web_interface->WebServer.streamFile(file, contentType);
         file.close();
+        return;
     } else {
+        page_not_found = true;
+    }
+
+    if (page_not_found ) {
+        LOG("Page not found it \n")
         if (SPIFFS.exists("/404.tpl")) {
             STORESTRINGS_CLASS KeysList ;
             STORESTRINGS_CLASS ValuesList ;
             String stmp;
 
             //IP+Web
-            GetIpWeb(KeysList, ValuesList);
+            web_interface->GetIpWeb(KeysList, ValuesList);
             //mode
-            GetMode(KeysList, ValuesList);
+            web_interface->GetMode(KeysList, ValuesList);
             //page title and filenames
-            SetPageProp(KeysList,ValuesList,F("404 Page not found"),F("404"));
+            web_interface->SetPageProp(KeysList,ValuesList,F("404 Page not found"),F("404"));
 
             //Firmware and Free Mem, at the end to reflect situation
-            GetFreeMem(KeysList, ValuesList);
+            web_interface->GetFreeMem(KeysList, ValuesList);
 
             //process the template file and provide list of variables
-            processTemplate("/404.tpl", KeysList , ValuesList);
+            web_interface->processTemplate("/404.tpl", KeysList , ValuesList);
             //need to clean to speed up memory recovery
             KeysList.clear();
             ValuesList.clear();
@@ -2586,7 +3112,7 @@ void handle_not_found()
             //if not template use default page
             contentType=FPSTR(PAGE_404);
             String stmp;
-            if (wifi_get_opmode()==WIFI_STA ) {
+            if (WiFi.getMode()==WIFI_STA ) {
                 stmp=WiFi.localIP().toString();
             } else {
                 stmp=WiFi.softAPIP().toString();
@@ -2595,7 +3121,7 @@ void handle_not_found()
             String KEY_IP = FPSTR(KEY_WEB_ADDRESS);
             if (wifi_config.iweb_port!=80) {
                 stmp+=":";
-                stmp+=intTostr(wifi_config.iweb_port);
+                stmp+=CONFIG::intTostr(wifi_config.iweb_port);
             }
             contentType.replace(KEY_IP,stmp);
             web_interface->WebServer.send(200,"text/html",contentType);
@@ -2603,6 +3129,7 @@ void handle_not_found()
     }
 }
 
+#ifdef AUTHENTICATION_FEATURE
 void handle_login()
 {
     static const char NOT_AUTH_LOG [] PROGMEM = "HTTP/1.1 301 OK\r\nSet-Cookie: ESPSESSIONID=0\r\nLocation: /LOGIN\r\nCache-Control: no-cache\r\n\r\n";
@@ -2611,7 +3138,7 @@ void handle_login()
     String sReturn;
     String sUser,sPassword;
     bool msg_alert_error=false;
-    bool msg_alert_success=false;
+    //bool msg_alert_success=false;
     STORESTRINGS_CLASS KeysList ;
     STORESTRINGS_CLASS ValuesList ;
 
@@ -2623,35 +3150,40 @@ void handle_login()
     //check is it is a submission or a display
     smsg="";
     if (web_interface->WebServer.hasArg("return")) {
-        web_interface->urldecode(sReturn,web_interface->WebServer.arg("return").c_str());
+        sReturn = web_interface->WebServer.arg("return");
     }
     if (web_interface->WebServer.hasArg("SUBMIT")) {
         //is there a correct list of values?
         if ( web_interface->WebServer.hasArg("PASSWORD")&& web_interface->WebServer.hasArg("USER")) {
             //USER
-            web_interface->urldecode(sUser,web_interface->WebServer.arg("USER").c_str());
-#ifdef AUTHENTICATION_FEATURE
-            if (sUser!="admin") {
+            sUser = web_interface->WebServer.arg("USER");
+            if ( !((sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) || (sUser==FPSTR(DEFAULT_USER_LOGIN)))) {
                 msg_alert_error=true;
                 smsg.concat(F("Error : Incorrect User<BR>"));
                 KeysList.add(FPSTR(KEY_USER_STATUS));
                 ValuesList.add(FPSTR(VALUE_HAS_ERROR));
             }
             //Password
-            web_interface->urldecode(sPassword,web_interface->WebServer.arg("PASSWORD").c_str());
-            String scurrentPassword;
+            sPassword = web_interface->WebServer.arg("PASSWORD");
+            String sadminPassword;
 
-            if (!CONFIG::read_string(EP_ADMIN_PWD, scurrentPassword , MAX_ADMIN_PASSWORD_LENGTH)) {
-                scurrentPassword=FPSTR(DEFAULT_ADMIN);
+            if (!CONFIG::read_string(EP_ADMIN_PWD, sadminPassword , MAX_LOCAL_PASSWORD_LENGTH)) {
+                sadminPassword=FPSTR(DEFAULT_ADMIN_PWD);
             }
 
-            if (strcmp(sPassword.c_str(),scurrentPassword.c_str())!=0) {
+            String suserPassword;
+
+            if (!CONFIG::read_string(EP_USER_PWD, suserPassword , MAX_LOCAL_PASSWORD_LENGTH)) {
+                suserPassword=FPSTR(DEFAULT_USER_PWD);
+            }
+
+            if(!(((sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) && (strcmp(sPassword.c_str(),sadminPassword.c_str())==0)) ||
+                    ((sUser==FPSTR(DEFAULT_USER_LOGIN)) && (strcmp(sPassword.c_str(),suserPassword.c_str()) == 0)))) {
                 msg_alert_error=true;
                 smsg.concat(F("Error: Incorrect password<BR>"));
                 KeysList.add(FPSTR(KEY_USER_PASSWORD_STATUS));
                 ValuesList.add(FPSTR(VALUE_HAS_ERROR));
             }
-#endif
         } else {
             msg_alert_error=true;
             smsg = FPSTR(MISSING_DATA);
@@ -2661,6 +3193,11 @@ void handle_login()
         if (msg_alert_error==false) {
 #ifdef AUTHENTICATION_FEATURE
             auth_ip * current_auth = new auth_ip;
+            if(sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) {
+                current_auth->level = LEVEL_ADMIN;
+            } else {
+                current_auth->level = LEVEL_USER;
+            }
             current_auth->ip=web_interface->WebServer.client().remoteIP();
             strcpy(current_auth->sessionID,web_interface->create_session_ID());
             current_auth->last_time=millis();
@@ -2691,19 +3228,17 @@ void handle_login()
     KeysList.add(FPSTR(KEY_RETURN));
     ValuesList.add(sReturn);
 
-    KeysList.add(FPSTR(KEY_DISCONNECT_VISIBILITY));
-    if (web_interface->is_authenticated()) {
-        ValuesList.add(FPSTR(VALUE_ITEM_VISIBLE));
-    } else {
-        ValuesList.add(FPSTR(VALUE_ITEM_HIDDEN));
-    }
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+    //login
+    web_interface->GeLogin(KeysList, ValuesList,auth_level);
+
     //IP+Web
-    GetIpWeb(KeysList, ValuesList);
+    web_interface->GetIpWeb(KeysList, ValuesList);
     //mode
-    GetMode(KeysList, ValuesList);
+    web_interface->GetMode(KeysList, ValuesList);
 
     //page title and filenames
-    SetPageProp(KeysList,ValuesList,FPSTR(VALUE_LOGIN),F("login"));
+    web_interface->SetPageProp(KeysList,ValuesList,FPSTR(VALUE_LOGIN),F("login"));
     //User
     KeysList.add(FPSTR(KEY_USER));
     ValuesList.add(sUser);
@@ -2712,39 +3247,45 @@ void handle_login()
     ValuesList.add(sPassword);
 
     if (msg_alert_error) {
-        ProcessAlertError(KeysList, ValuesList, smsg);
+        web_interface->ProcessAlertError(KeysList, ValuesList, smsg);
     } else {
-        ProcessNoAlert(KeysList,ValuesList);
+        web_interface->ProcessNoAlert(KeysList,ValuesList);
     }
 
     //Firmware and Free Mem, at the end to reflect situation
-    GetFreeMem(KeysList, ValuesList);
+    web_interface->GetFreeMem(KeysList, ValuesList);
 
     //process the template file and provide list of variables
-    processTemplate("/login.tpl", KeysList , ValuesList);
+    web_interface->processTemplate("/login.tpl", KeysList , ValuesList);
     //need to clean to speed up memory recovery
     KeysList.clear();
     ValuesList.clear();
 }
-
+#endif
 void handle_restart()
 {
+    static const char NOT_AUTH_NF [] PROGMEM = "HTTP/1.1 301 OK\r\nLocation: /HOME\r\nCache-Control: no-cache\r\n\r\n";
+
+    if (web_interface->is_authenticated() != LEVEL_ADMIN) {
+        web_interface->WebServer.sendContent_P(NOT_AUTH_NF);
+        return;
+    }
     if (SPIFFS.exists("/restart.tpl")) {
         STORESTRINGS_CLASS KeysList ;
         STORESTRINGS_CLASS ValuesList ;
 
         //IP+Web
-        GetIpWeb(KeysList, ValuesList);
+        web_interface->GetIpWeb(KeysList, ValuesList);
         //mode
-        GetMode(KeysList, ValuesList);
+        web_interface->GetMode(KeysList, ValuesList);
         //page title and filenames
-        SetPageProp(KeysList,ValuesList,F("Restarting..."),F("restart"));
+        web_interface->SetPageProp(KeysList,ValuesList,F("Restarting..."),F("restart"));
 
         //Firmware and Free Mem, at the end to reflect situation
-        GetFreeMem(KeysList, ValuesList);
+        web_interface->GetFreeMem(KeysList, ValuesList);
 
         //process the template file and provide list of variables
-        processTemplate("/restart.tpl", KeysList , ValuesList);
+        web_interface->processTemplate("/restart.tpl", KeysList , ValuesList);
         //need to clean to speed up memory recovery
         KeysList.clear();
         ValuesList.clear();
@@ -2758,17 +3299,15 @@ void handle_restart()
 
 void handle_web_command()
 {
-    if (!web_interface->is_authenticated()) {
+    if (web_interface->is_authenticated() == LEVEL_GUEST) {
         return;
     }
     //check we have proper parameter
     if (web_interface->WebServer.hasArg("COM")) {
         String scmd;
         //decode command
-        web_interface->urldecode(scmd,web_interface->WebServer.arg("COM").c_str());
+        scmd = web_interface->WebServer.arg("COM");
         scmd.trim();
-        //send command to serial
-        Serial.println(scmd);
         //give an ack - we need to be polite, right ?
         web_interface->WebServer.send(200,"text/plain","Ok");
         //if it is for ESP module [ESPXXX]<parameter>
@@ -2790,6 +3329,12 @@ void handle_web_command()
                 }
                 //if not is not a valid [ESPXXX] command
             }
+        } else {
+            //send command to serial as no need to transfer ESP command
+            //to avoid any pollution if Uploading file to SDCard
+            if ((web_interface->blockserial) == false) {
+                Serial.println(scmd);
+            }
         }
     }
 }
@@ -2800,43 +3345,6 @@ void handle_SSDP()
     SSDP.schema(web_interface->WebServer.client());
 }
 #endif
-
-//URI Decoding function
-void   WEBINTERFACE_CLASS::urldecode( String & dst, const char *src)
-{
-    char a, b,c;
-    dst="";
-    while (*src) {
-        if ((*src == '%') &&
-                ((a = src[1]) && (b = src[2])) &&
-                (isxdigit(a) && isxdigit(b))) {
-            if (a >= 'a') {
-                a -= 'a'-'A';
-            }
-            if (a >= 'A') {
-                a -= ('A' - 10);
-            } else {
-                a -= '0';
-            }
-            if (b >= 'a') {
-                b -= 'a'-'A';
-            }
-            if (b >= 'A') {
-                b -= ('A' - 10);
-            } else {
-                b -= '0';
-            }
-            dst+= char(16*a+b);
-            src+=3;
-        } else {
-            c = *src++;
-            if(c=='+') {
-                c=' ';
-            }
-            dst+= char(c);
-        }
-    }
-}
 
 //constructor
 WEBINTERFACE_CLASS::WEBINTERFACE_CLASS (int port):WebServer(port)
@@ -2856,9 +3364,11 @@ WEBINTERFACE_CLASS::WEBINTERFACE_CLASS (int port):WebServer(port)
     WebServer.on("/UPDATE",HTTP_ANY, handleUpdate,WebUpdateUpload);
 #endif
     WebServer.on("/FILES", HTTP_ANY, handleFileList,SPIFFSFileupload);
-    WebServer.on("/SDFILES", HTTP_ANY, handleSDFileList);
+    WebServer.on("/SDFILES", HTTP_ANY, handleSDFileList,SDFileupload);
+#ifdef AUTHENTICATION_FEATURE
     WebServer.on("/LOGIN", HTTP_ANY, handle_login);
     WebServer.on("/PASSWORD", HTTP_ANY, handle_password);
+#endif
     //Captive portal Feature
 #ifdef CAPTIVE_PORTAL_FEATURE
     WebServer.on("/generate_204",HTTP_ANY, handle_web_interface_root);
@@ -2868,22 +3378,39 @@ WEBINTERFACE_CLASS::WEBINTERFACE_CLASS (int port):WebServer(port)
     WebServer.on("/description.xml", HTTP_GET, handle_SSDP);
 #endif
     WebServer.onNotFound( handle_not_found);
+#ifdef TEMP_MONITORING_FEATURE
     answer4M105="T:0 /0 ";
+    last_temp = millis();
+#endif
+#ifdef POS_MONITORING_FEATURE
     answer4M114="X:0.0 Y:0.0 Z:0.000";
+#endif
+#ifdef SPEED_MONITORING_FEATURE
     answer4M220="100";
+#endif
+#ifdef FLOW_MONITORING_FEATURE
     answer4M221="100";
-    last_temp=system_get_time();
+#endif
+    blockserial = false;
     restartmodule=false;
     //rolling list of 4entries with a maximum of 50 char for each entry
+#ifdef ERROR_MSG_FEATURE
     error_msg.setsize(4);
     error_msg.setlength(50);
+#endif
+#ifdef INFO_MSG_FEATURE
     info_msg.setsize(4);
     info_msg.setlength(50);
+#endif
+#ifdef STATUS_MSG_FEATURE
     status_msg.setsize(4);
     status_msg.setlength(50);
-    fileslist.setlength(30);//12 for filename + space + size
+#endif
+#ifndef DIRECT_SDCARD_FEATURE
+    fileslist.setlength(100);//12 for filename + space + size
     fileslist.setsize(70); // 70 files to limite to 2K
-    fsUploadFile=(fs::File)0;
+#endif
+    fsUploadFile=(FSFILE)0;
     _head=NULL;
     _nb_ip=0;
     _upload_status=UPLOAD_STATUS_NONE;
@@ -2891,10 +3418,18 @@ WEBINTERFACE_CLASS::WEBINTERFACE_CLASS (int port):WebServer(port)
 //Destructor
 WEBINTERFACE_CLASS::~WEBINTERFACE_CLASS()
 {
+#ifdef INFO_MSG_FEATURE
     info_msg.clear();
+#endif
+#ifdef ERROR_MSG_FEATURE
     error_msg.clear();
+#endif
+#ifdef STATUS_MSG_FEATURE
     status_msg.clear();
+#endif
+#ifndef DIRECT_SDCARD_FEATURE
     fileslist.clear();
+#endif
     while (_head) {
         auth_ip * current = _head;
         _head=_head->_next;
@@ -2902,6 +3437,40 @@ WEBINTERFACE_CLASS::~WEBINTERFACE_CLASS()
     }
     _nb_ip=0;
 }
+//check authentification
+level_authenticate_type  WEBINTERFACE_CLASS::is_authenticated()
+{
+#ifdef AUTHENTICATION_FEATURE
+    if (WebServer.hasHeader("Cookie")) {
+        String cookie = WebServer.header("Cookie");
+        int pos = cookie.indexOf("ESPSESSIONID=");
+        if (pos!= -1) {
+            int pos2 = cookie.indexOf(";",pos);
+            String sessionID = cookie.substring(pos+strlen("ESPSESSIONID="),pos2);
+            IPAddress ip = WebServer.client().remoteIP();
+            //check if cookie can be reset and clean table in same time
+            return ResetAuthIP(ip,sessionID.c_str());
+        }
+    }
+    return LEVEL_GUEST;
+#else
+    return LEVEL_ADMIN;
+#endif
+}
+
+//add the information in the linked list if possible
+bool WEBINTERFACE_CLASS::AddAuthIP(auth_ip * item)
+{
+    if (_nb_ip>MAX_AUTH_IP) {
+        return false;
+    }
+    item->_next=_head;
+    _head=item;
+    _nb_ip++;
+    return true;
+}
+
+#ifdef AUTHENTICATION_FEATURE
 //Session ID based on IP and time using 16 char
 char * WEBINTERFACE_CLASS::create_session_ID()
 {
@@ -2920,48 +3489,15 @@ char * WEBINTERFACE_CLASS::create_session_ID()
     }
     return sessionID;
 }
-//check authentification
-bool  WEBINTERFACE_CLASS::is_authenticated()
-{
-#ifdef AUTHENTICATION_FEATURE
-    if (WebServer.hasHeader("Cookie")) {
-        String cookie = WebServer.header("Cookie");
-        int pos = cookie.indexOf("ESPSESSIONID=");
-        if (pos!= -1) {
-            int pos2 = cookie.indexOf(";",pos);
-            String sessionID = cookie.substring(pos+strlen("ESPSESSIONID="),pos2);
-            IPAddress ip = WebServer.client().remoteIP();
-            //check if cookie can be reset and clean table in same time
-            return ResetAuthIP(ip,sessionID.c_str());
-        }
-    }
-    return false;
-#else
-    return true;
-#endif
-}
 
-//add the information in the linked list if possible
-bool WEBINTERFACE_CLASS::AddAuthIP(auth_ip * item)
+level_authenticate_type WEBINTERFACE_CLASS::ResetAuthIP(IPAddress ip,const char * sessionID)
 {
-    if (_nb_ip>MAX_AUTH_IP) {
-        return false;
-    }
-    item->_next=_head;
-    _head=item;
-    _nb_ip++;
-    return true;
-}
-
-bool WEBINTERFACE_CLASS::ResetAuthIP(IPAddress ip,const char * sessionID)
-{
-    bool done=false;
     auth_ip * current = _head;
     auth_ip * previous = NULL;
     //get time
-    uint32_t now = millis();
+    //uint32_t now = millis();
     while (current) {
-        if ((millis()-current->last_time)>400000) {
+        if ((millis()-current->last_time)>180000) {
             //remove
             if (current==_head) {
                 _head=current->_next;
@@ -2979,14 +3515,54 @@ bool WEBINTERFACE_CLASS::ResetAuthIP(IPAddress ip,const char * sessionID)
                 if (strcmp(sessionID,current->sessionID)==0) {
                     //reset time
                     current->last_time=millis();
-                    return true;
+                    return current->level;
                 }
             }
             previous = current;
             current=current->_next;
         }
     }
-    return done;
+    return LEVEL_GUEST;
 }
+#endif
+
+String WEBINTERFACE_CLASS::getContentType(String filename)
+{
+    if(filename.endsWith(".htm")) {
+        return "text/html";
+    } else if(filename.endsWith(".html")) {
+        return "text/html";
+    } else if(filename.endsWith(".css")) {
+        return "text/css";
+    } else if(filename.endsWith(".js")) {
+        return "application/javascript";
+    } else if(filename.endsWith(".png")) {
+        return "image/png";
+    } else if(filename.endsWith(".gif")) {
+        return "image/gif";
+    } else if(filename.endsWith(".jpeg")) {
+        return "image/jpeg";
+    } else if(filename.endsWith(".jpg")) {
+        return "image/jpeg";
+    } else if(filename.endsWith(".ico")) {
+        return "image/x-icon";
+    } else if(filename.endsWith(".xml")) {
+        return "text/xml";
+    } else if(filename.endsWith(".pdf")) {
+        return "application/x-pdf";
+    } else if(filename.endsWith(".zip")) {
+        return "application/x-zip";
+    } else if(filename.endsWith(".gz")) {
+        return "application/x-gzip";
+    } else if(filename.endsWith(".tpl")) {
+        return "text/plain";
+    } else if(filename.endsWith(".inc")) {
+        return "text/plain";
+    } else if(filename.endsWith(".txt")) {
+        return "text/plain";
+    }
+    return "application/octet-stream";
+}
+
 
 WEBINTERFACE_CLASS * web_interface;

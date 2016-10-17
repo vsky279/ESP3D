@@ -1,5 +1,5 @@
 /*
-  command.h - esp8266 configuration class
+  bridge.h - esp3d bridge serial/tcp class
 
   Copyright (c) 2014 Luc Lebosse. All rights reserved.
 
@@ -18,21 +18,22 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-#ifndef COMMAND_h
-#define COMMAND_h
-#include <Arduino.h>
+#include "config.h"
 
-class COMMAND
+#ifndef BRIDGE_H
+#define BRIDGE_H
+
+#ifdef TCP_IP_DATA_FEATURE
+extern WiFiServer * data_server;
+#endif
+
+class BRIDGE
 {
 public:
-    static String buffer_serial;
-    static String buffer_tcp;
-    static void read_buffer_serial(uint8_t *b, size_t len);
-    static void read_buffer_serial(uint8_t b);
-    static void read_buffer_tcp(uint8_t b);
-    static void check_command(String buffer);
-    static void execute_command(int cmd,String cmd_params);
-
+    static bool processFromSerial2TCP();
+#ifdef TCP_IP_DATA_FEATURE
+    static void processFromTCP2Serial();
+#endif
 };
 
 #endif
