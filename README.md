@@ -4,11 +4,11 @@ This firmware allows not only to have a cheap bridge between Wifi and serial, bu
 UI is fully customizable without reflashing FW.
 Firmware should work with any 3D printer firmware (repetier/marlin/etc..) if serial connection has correct setup.
 I currently use it with my personnal flavor of [repetier for Due based boards](https://github.com/luc-github/Repetier-Firmware-0.92).
-Please use ESP with at least 1M flash, for ESP with 512K there is limited version [here](https://github.com/luc-github/ESP3D/tree/ESP-512K-64KSPIFFS)
+Please use ESP with at least 1M flash
 
 <u>Stable version:</u>    
 <u>Development version:</u>    
-Arduino ide 1.6.9 with git from ESP8266 : [![build status](http://tech-hunters.myds.me:2002/luc/ESP3D/badges/master/build.svg)](http://tech-hunters.myds.me:2002/luc/ESP3D/commits/master)
+Arduino ide 1.8.0 with git from ESP8266 : [![build status](http://tech-hunters.myds.me:2002/luc/ESP3D/badges/devt/build.svg)](http://tech-hunters.myds.me:2002/luc/ESP3D/commits/master)
 
 [All releases](https://github.com/luc-github/ESP3D/wiki)
 
@@ -63,114 +63,19 @@ Baud rate: 9600
 Web port:80   
 Data port: 8888     
 Web Page refresh: 3 secondes    
-User: admin     
-Password: admin
+User (if authentication is enabled): admin     
+Password (if authentication is enabled): admin
+User (if authentication is enabled):user
+Password(if authentication is enabled): user
 
-User:user
-Password: user
+Additionally 404.html (the page not found) is not mandatory, a fail safe version is embeded if it isnot present.     
 
-These are the pages defined using template:    
-Home page :     
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page1.png><br>
-System Configuration Page:     
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page2.png><br>     
-Access Point Configuration Page:    
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page3.png><br>     
-Client Configuration Page:     
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page4.png><br>     
-Printer Status Page for 64K SPIFFS, due to limited space available no fancy:     
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page5-2.png><br>    
-Printer Status Page for more than 64K SPIFFS, fancy one:     
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/page5.png><br>     
-Extra Settings Page, for web UI and for printer:     
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page6.png><br>     
-Change password Page:    
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page7.png><br>     
-Login Page:    
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/Page8.png><br>     
-the template files are stored on SPIFFS:    
-<img src=https://raw.githubusercontent.com/luc-github/ESP3D/master/images/UI/files.png><br>
-and uploaded using [pluggin IDE](http://esp8266.github.io/Arduino/versions/2.1.0/doc/filesystem.html#uploading-files-to-file-system)    
-Any files on SPIFFS can be called on web interface without having the path hard coded, this give more flexibility, favicon.ico is a good example of it.         
-So UI is kind of separated from FW which allow easier modifications. For this a light file manager is available in extra settings page, it allows to upload/download/delete files. 
-Because SPIFFS is flat filesystem, no directory management is necessary, so it is very simple.
-
-Additionally 404.tpl (the page not found) and restart.tpl(restart page when applying changes) are not mandatory, a fail safe version is embeded if they are not present.     
-
-##Direct commands:    
-```
-* Change STA SSID    
-[ESP100]<SSID>   
-if authentication is on, need admin password   
-[ESP100]<SSID>pwd=<admin password>   
-
-* Change STA Password    
-[ESP101]<Password>   
-if authentication is on, need admin password   
-[ESP101]<Password>pwd=<admin password>   
-
-* Change Hostname   
-[ESP102]<hostname>   
-if authentication is on, need admin password   
-[ESP102]<hostname>pwd=<admin password>   
-
-* Change Wifi mode (STA/AP)   
-[ESP103]<mode>   
-if authentication is on, need admin password   
-[ESP103]<mode>pwd=<admin password>   
-
-* Change STA IP mode (DHCP/STATIC)   
-[ESP104]<mode>   
-if authentication is on, need admin password   
-[ESP104]<mode>pwd=<admin password>   
-
-* Change AP SSID   
-[ESP105]<SSID>   
-if authentication is on, need admin password   
-[ESP105]<SSID>pwd=<admin password>   
-
-* Change AP Password   
-[ESP106]<Password>  
-if authentication is on, need admin password  
-[ESP106]<Password>pwd=<admin password>   
-
-* Change AP IP mode (DHCP/STATIC)   
-[ESP107]<mode>   
-if authentication is on, need admin password   
-[ESP107]<mode>pwd=<admin password>   
-
-* Get current IP  
-[ESP111]<header answer>  
-
-* Get hostname   
-[ESP112]<header answer>   
-
-* Get/Set ESP mode   
-cmd can be RESET, SAFEMODE, CONFIG, RESTART   
-[ESP444]<cmd>   
-if authentication is on, need admin password for RESET, RESTART and SAFEMODE   
-[ESP444]<cmd>pwd=<admin password>   
-
-* Change / Reset user password   
-[ESP555]<password>pwd=<admin password>   
-if no password set it use default one   
-
-* Read SPIFFS file and send each line to serial   
-[ESP700]<filename>   
-
-* Get fw version    
-[ESP800]<header answer>   
-
-* Clear status/error/info list   
-cmd can be ALL, ERROR, INFO, STATUS   
-[ESP999]<cmd>   
- 
- ```
 ##Installation
-* For stable:
 Please use [Arduino IDE 1.8.0](http://arduino.cc/en/Main/Software) and [git version of esp8266 module](http://esp8266.github.io/Arduino/versions/2.2.0/doc/installing.html#using-git-version)
 
-* To flash the module :   
+UI is present in data directory and must be flashed on SPIFFS also but latest version can found at https://github.com/luc-github/ESP3D-WEBUI
+
+* Parameter to flash the module :   
 ```
 //MDNS_FEATURE: this feature allow  type the name defined
 //in web browser by default: http:\\esp8266.local and connect
@@ -196,9 +101,6 @@ Please use [Arduino IDE 1.8.0](http://arduino.cc/en/Main/Software) and [git vers
 
 //RECOVERY_FEATURE: allow to use GPIO2 pin as hardware reset for EEPROM, add 8s to boot time to let user to jump GPIO2 to GND
 #define RECOVERY_FEATURE
-
-//DEBUG Flag
-//#define DEBUG_ESP3D 
 ```
 ## After flash
 Go to  ESP3D tab and edit settings to match your printer ( printer firmware, possible SD access, etc...)
