@@ -32,9 +32,9 @@
 String COMMAND::buffer_serial;
 String COMMAND::buffer_tcp;
 
-#define ERROR_CMD_MSG F("\nM117 Cmd Error")
-#define INCORRECT_CMD_MSG F("\nM117 Incorrect Cmd")
-#define OK_CMD_MSG F("\nM117 Cmd Ok")
+#define ERROR_CMD_MSG (output == WEB_PIPE)?F("Error: Wrong Command"):F("M117 Cmd Error")
+#define INCORRECT_CMD_MSG (output == WEB_PIPE)?F("Error: Incorrect Command"):F("M117 Incorrect Cmd")
+#define OK_CMD_MSG (output == WEB_PIPE)?F("ok"):F("M117 Cmd Ok")
 
 String COMMAND::get_param(String & cmd_params, const char * id, bool withspace)
 {
@@ -60,10 +60,12 @@ String COMMAND::get_param(String & cmd_params, const char * id, bool withspace)
     if (!withspace) {
         end = cmd_params.indexOf(" ",start);
     }
+#ifdef AUTHENTICATION_FEATURE
     //if space expected only one parameter but additional password may be present
-    else if (sid!="pwd=") {
-        end = cmd_params.indexOf("pwd=",start);
+    else if (sid != " pwd=") {
+        end = cmd_params.indexOf(" pwd=",start);
     }
+#endif
     //if no end found - take all
     if (end == -1) {
         end = cmd_params.length();
@@ -75,45 +77,77 @@ String COMMAND::get_param(String & cmd_params, const char * id, bool withspace)
     return parameter;
 }
 #ifdef AUTHENTICATION_FEATURE
+//check admin password
 bool COMMAND::isadmin(String & cmd_params)
 {
     String adminpassword;
     String sadminPassword;
-    if (!CONFIG::read_string(EP_ADMIN_PWD, sadminPassword , MAX_LOCAL_PASSWORD_LENGTH)) {
-        LOG("ERROR getting admin\n")
+    if (!CONFIG::read_string(EP_ADMIN_PWD, sadminPassword, MAX_LOCAL_PASSWORD_LENGTH)) {
+        LOG("ERROR getting admin\r\n")
         sadminPassword=FPSTR(DEFAULT_ADMIN_PWD);
     }
     adminpassword = get_param(cmd_params,"pwd=", true);
     if (!sadminPassword.equals(adminpassword)) {
-        LOG("Not allowed \n")
+        LOG("Not allowed\r\n")
         return false;
     } else {
         return true;
     }
 }
-#endif
-void COMMAND::execute_command(int cmd,String cmd_params)
+//check user password - admin password is also valid
+bool COMMAND::isuser(String & cmd_params)
 {
+    String userpassword;
+    String suserPassword;
+    if (!CONFIG::read_string(EP_USER_PWD, suserPassword, MAX_LOCAL_PASSWORD_LENGTH)) {
+        LOG("ERROR getting user\r\n")
+        suserPassword=FPSTR(DEFAULT_USER_PWD);
+    }
+    userpassword = get_param(cmd_params,"pwd=", true);
+    //it is not user password
+    if (!suserPassword.equals(userpassword)) {
+        //check admin password
+        return COMMAND::isadmin(cmd_params);
+    } else {
+        return true;
+    }
+}
+#endif
+bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_authenticate_type auth_level)
+{
+    bool response = true;
+#ifdef AUTHENTICATION_FEATURE
+    level_authenticate_type auth_type = auth_level;
+    if (isadmin(cmd_params)) {
+        auth_type = LEVEL_ADMIN;
+    }
+    if (isuser(cmd_params) && (auth_type != LEVEL_ADMIN)) {
+        auth_type = LEVEL_USER;
+    }
+
+#endif
     //manage parameters
     byte mode = 254;
     String parameter;
+    LOG("Execute Command\r\n")
     switch(cmd) {
     //STA SSID
     //[ESP100]<SSID>[pwd=<admin password>]
     case 100:
         parameter = get_param(cmd_params,"", true);
         if (!CONFIG::isSSIDValid(parameter.c_str())) {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
         }
 #ifdef AUTHENTICATION_FEATURE
-        if (!isadmin(cmd_params)) {
-            Serial.println(INCORRECT_CMD_MSG);
+        if (auth_type != LEVEL_ADMIN) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
         } else
 #endif
             if(!CONFIG::write_string(EP_STA_SSID,parameter.c_str())) {
-                Serial.println(ERROR_CMD_MSG);
+                BRIDGE::println(ERROR_CMD_MSG, output);
+                response = false;
             } else {
-                Serial.println(OK_CMD_MSG);
+                BRIDGE::println(OK_CMD_MSG, output);
             }
         break;
     //STA Password
@@ -121,17 +155,20 @@ void COMMAND::execute_command(int cmd,String cmd_params)
     case 101:
         parameter = get_param(cmd_params,"", true);
         if (!CONFIG::isPasswordValid(parameter.c_str())) {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
 #ifdef AUTHENTICATION_FEATURE
-        if (!isadmin(cmd_params)) {
-            Serial.println(INCORRECT_CMD_MSG);
+        if (auth_type != LEVEL_ADMIN) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         } else
 #endif
             if(!CONFIG::write_string(EP_STA_PASSWORD,parameter.c_str())) {
-                Serial.println(ERROR_CMD_MSG);
+                BRIDGE::println(ERROR_CMD_MSG, output);
+                response = false;
             } else {
-                Serial.println(OK_CMD_MSG);
+                BRIDGE::println(OK_CMD_MSG, output);
             }
         break;
     //Hostname
@@ -139,17 +176,20 @@ void COMMAND::execute_command(int cmd,String cmd_params)
     case 102:
         parameter = get_param(cmd_params,"", true);
         if (!CONFIG::isHostnameValid(parameter.c_str())) {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
 #ifdef AUTHENTICATION_FEATURE
-        if (!isadmin(cmd_params)) {
-            Serial.println(INCORRECT_CMD_MSG);
+        if (auth_type != LEVEL_ADMIN) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         } else
 #endif
             if(!CONFIG::write_string(EP_HOSTNAME,parameter.c_str())) {
-                Serial.println(ERROR_CMD_MSG);
+                BRIDGE::println(ERROR_CMD_MSG, output);
+                response = false;
             } else {
-                Serial.println(OK_CMD_MSG);
+                BRIDGE::println(OK_CMD_MSG, output);
             }
         break;
     //Wifi mode (STA/AP)
@@ -161,18 +201,21 @@ void COMMAND::execute_command(int cmd,String cmd_params)
         } else if (parameter == "AP") {
             mode = AP_MODE;
         } else {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
         if ((mode == CLIENT_MODE) || (mode == AP_MODE)) {
 #ifdef AUTHENTICATION_FEATURE
-            if (!isadmin(cmd_params)) {
-                Serial.println(INCORRECT_CMD_MSG);
+            if (auth_type != LEVEL_ADMIN) {
+                BRIDGE::println(INCORRECT_CMD_MSG, output);
+                response = false;
             } else
 #endif
                 if(!CONFIG::write_byte(EP_WIFI_MODE,mode)) {
-                    Serial.println(ERROR_CMD_MSG);
+                    BRIDGE::println(ERROR_CMD_MSG, output);
+                    response = false;
                 } else {
-                    Serial.println(OK_CMD_MSG);
+                    BRIDGE::println(OK_CMD_MSG, output);
                 }
         }
         break;
@@ -185,18 +228,21 @@ void COMMAND::execute_command(int cmd,String cmd_params)
         } else if (parameter == "DHCP") {
             mode = DHCP_MODE;
         } else {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
         if ((mode == STATIC_IP_MODE) || (mode == DHCP_MODE)) {
 #ifdef AUTHENTICATION_FEATURE
-            if (!isadmin(cmd_params)) {
-                Serial.println(INCORRECT_CMD_MSG);
+            if (auth_type != LEVEL_ADMIN) {
+                BRIDGE::println(INCORRECT_CMD_MSG, output);
+                response = false;
             } else
 #endif
                 if(!CONFIG::write_byte(EP_STA_IP_MODE,mode)) {
-                    Serial.println(ERROR_CMD_MSG);
+                    BRIDGE::println(ERROR_CMD_MSG, output);
+                    response = false;
                 } else {
-                    Serial.println(OK_CMD_MSG);
+                    BRIDGE::println(OK_CMD_MSG, output);
                 }
         }
         break;
@@ -205,17 +251,20 @@ void COMMAND::execute_command(int cmd,String cmd_params)
     case 105:
         parameter = get_param(cmd_params,"", true);
         if (!CONFIG::isSSIDValid(parameter.c_str())) {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
 #ifdef AUTHENTICATION_FEATURE
-        if (!isadmin(cmd_params)) {
-            Serial.println(INCORRECT_CMD_MSG);
+        if (auth_type != LEVEL_ADMIN) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         } else
 #endif
             if(!CONFIG::write_string(EP_AP_SSID,parameter.c_str())) {
-                Serial.println(ERROR_CMD_MSG);
+                BRIDGE::println(ERROR_CMD_MSG, output);
+                response = false;
             } else {
-                Serial.println(OK_CMD_MSG);
+                BRIDGE::println(OK_CMD_MSG, output);
             }
         break;
     //AP Password
@@ -223,17 +272,20 @@ void COMMAND::execute_command(int cmd,String cmd_params)
     case 106:
         parameter = get_param(cmd_params,"", true);
         if (!CONFIG::isPasswordValid(parameter.c_str())) {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
 #ifdef AUTHENTICATION_FEATURE
-        if (!isadmin(cmd_params)) {
-            Serial.println(INCORRECT_CMD_MSG);
+        if (auth_type != LEVEL_ADMIN) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         } else
 #endif
             if(!CONFIG::write_string(EP_AP_PASSWORD,parameter.c_str())) {
-                Serial.println(ERROR_CMD_MSG);
+                BRIDGE::println(ERROR_CMD_MSG, output);
+                response = false;
             } else {
-                Serial.println(OK_CMD_MSG);
+                BRIDGE::println(OK_CMD_MSG, output);
             }
         break;
     //AP IP mode (DHCP/STATIC)
@@ -245,18 +297,21 @@ void COMMAND::execute_command(int cmd,String cmd_params)
         } else if (parameter == "DHCP") {
             mode = DHCP_MODE;
         } else {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
         if ((mode == STATIC_IP_MODE) || (mode == DHCP_MODE)) {
 #ifdef AUTHENTICATION_FEATURE
-            if (!isadmin(cmd_params)) {
-                Serial.println(INCORRECT_CMD_MSG);
+            if (auth_type != LEVEL_ADMIN) {
+                BRIDGE::println(INCORRECT_CMD_MSG, output);
+                response = false;
             } else
 #endif
                 if(!CONFIG::write_byte(EP_AP_IP_MODE,mode)) {
-                    Serial.println(ERROR_CMD_MSG);
+                    BRIDGE::println(ERROR_CMD_MSG, output);
+                    response = false;
                 } else {
-                    Serial.println(OK_CMD_MSG);
+                    BRIDGE::println(OK_CMD_MSG, output);
                 }
         }
         break;
@@ -269,123 +324,1018 @@ void COMMAND::execute_command(int cmd,String cmd_params)
         } else {
             currentIP=WiFi.softAPIP().toString();
         }
-        Serial.print("\n\r");
-        Serial.print(cmd_params);
-        Serial.println(currentIP);
-        Serial.print("\r\n");
+        BRIDGE::print(cmd_params, output);
+        BRIDGE::println(currentIP, output);
+        LOG(cmd_params)
+        LOG(currentIP)
+        LOG("\r\n")
     }
     break;
     //Get hostname
     //[ESP112]<header answer>
     case 112: {
         String shost ;
-        if (!CONFIG::read_string(EP_HOSTNAME, shost , MAX_HOSTNAME_LENGTH)) {
+        if (!CONFIG::read_string(EP_HOSTNAME, shost, MAX_HOSTNAME_LENGTH)) {
             shost=wifi_config.get_default_hostname();
         }
-        Serial.print("\n\r");
-        Serial.print(cmd_params);
-        Serial.println(shost);
-        Serial.print("\r\n");
+        BRIDGE::print(cmd_params, output);
+        BRIDGE::println(shost, output);
+        LOG(cmd_params)
+        LOG(shost)
+        LOG("\r\n")
     }
     break;
-
-#ifdef DIRECT_PIN_FEATURE
-    //Get/Set pin value
-    //[ESP201]P<pin> V<value>
-    case 201: {
-        //check if have pin
-        parameter = get_param(cmd_params,"P", true);
-        LOG(parameter)
-        LOG("\n")
-        if (parameter == "") {
-            Serial.println(INCORRECT_CMD_MSG);
-        } else {
-            int pin = parameter.toInt();
-            //check pin is valid and not serial used pins
-            if ((pin >= 0) && (pin <= 16) && !((pin == 1) || (pin == 3))) {
-                //check if is set or get
-                parameter = get_param(cmd_params,"V", true);
-                //it is a get
-                if (parameter == "") {
-                    //GPIO16 is different than
-                    if (pin <16) {
-                        pinMode(pin, INPUT_PULLUP);
-                    } else {
-                        pinMode(pin, INPUT_PULLDOWN_16);
-                    }
-                    delay(10);
-                    int value =	 digitalRead(pin);
-                    Serial.println(String(value));
-                } else {
-                    //it is a set
-                    int value = parameter.toInt();
-                    //verify it is a 0 or a 1
-                    if ((value == 0) || (value == 1)) {
-                        pinMode(pin, OUTPUT);
-                        delay(10);
-                        digitalWrite(pin, (value == 0)?LOW:HIGH);
-                    } else {
-                        Serial.println(INCORRECT_CMD_MSG);
-                    }
-                }
-            } else {
-                Serial.println(INCORRECT_CMD_MSG);
-            }
-        }
+    //restart time client
+#ifdef  TIMESTAMP_FEATURE
+    case 114: {
+        CONFIG::init_time_client();
+        LOG("restart time client\r\n")
     }
     break;
 #endif
+#ifdef SDCARD_FEATURE
+    //Get SD Card Status
+    //[ESP200]<header answer>
+    case 200: 
+    if (CONFIG::is_direct_sd) {
+        BRIDGE::print(cmd_params, output);
+        if (CONFIG::hasSD()) {
+            BRIDGE::println("SD card detected", output);
+        } else {
+            BRIDGE::println("No SD card", output);
+        }
+    } else  BRIDGE::println("No SD card", output);
+    break;
+#endif
+#ifdef DIRECT_PIN_FEATURE
+    //Get/Set pin value
+    //[ESP201]P<pin> V<value>
+    case 201:
+        parameter = get_param(cmd_params,"", true);
+#ifdef AUTHENTICATION_FEATURE
+        if (auth_type == LEVEL_GUEST) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
+        } else
+#endif
+        {
+            //check if have pin
+            parameter = get_param(cmd_params,"P", false);
+            LOG("Pin:")
+            LOG(parameter)
+            LOG("\r\n")
+            if (parameter == "") {
+                BRIDGE::println(INCORRECT_CMD_MSG, output);
+                response = false;
+            } else {
+                int pin = parameter.toInt();
+                //check pin is valid and not serial used pins
+                if ((pin >= 0) && (pin <= 16) && !((pin == 1) || (pin == 3))) {
+                    //check if is set or get
+                    parameter = get_param(cmd_params,"V", false);
+                    //it is a get
+                    if (parameter == "") {
+                        //this is to not set pin mode
+                        parameter = get_param(cmd_params,"RAW=", false);
+                        if (parameter !="YES") {
+                            parameter = get_param(cmd_params,"PULLUP=", false);
+                            if (parameter == "YES") {
+                                //GPIO16 is different than others
+                                if (pin <16) {
+                                    LOG("Set as input pull up\r\n")
+                                    pinMode(pin, INPUT_PULLUP);
+                                } else {
+                                    LOG("Set as input pull down 16\r\n")
+                                    pinMode(pin, INPUT_PULLDOWN_16);
+                                }
+                            } else {
+                                LOG("Set as input\r\n")
+                                pinMode(pin, INPUT);
+                            }
+                            delay(100);
+                        }
+                        int value = digitalRead(pin);
+                        LOG("Read:");
+                        LOG(String(value).c_str())
+                        LOG("\n");
+                        BRIDGE::println(String(value).c_str(), output);
+                    } else {
+                        //it is a set
+                        int value = parameter.toInt();
+                        //verify it is a 0 or a 1
+                        if ((value == 0) || (value == 1)) {
+                            pinMode(pin, OUTPUT);
+                            delay(10);
+                            LOG("Set:")
+                            LOG(String((value == 0)?LOW:HIGH))
+                            LOG("\r\n")
+                            digitalWrite(pin, (value == 0)?LOW:HIGH);
+                            BRIDGE::println(OK_CMD_MSG, output);
+                        } else {
+                            BRIDGE::println(INCORRECT_CMD_MSG, output);
+                            response = false;
+                        }
+                    }
+                } else {
+                    BRIDGE::println(INCORRECT_CMD_MSG, output);
+                    response = false;
+                }
+            }
+        }
+        break;
+#endif
 
-    //Get/Set ESP mode
-    //cmd is RESET, SAFEMODE, CONFIG, RESTART
+#ifdef SDCARD_FEATURE
+    //Get SD Card content
+    //[ESP202]<header answer>
+    case 202: 
+    if (CONFIG::is_direct_sd) {
+        if (CONFIG::hasSD()) {
+#if defined(SDCARD_FLAG_PIN) && SDCARD_FLAG_PIN != -1
+//save flag state
+            bool is_low = !digitalRead(SDCARD_FLAG_PIN);
+            if(!is_low)ACCESSSD()
+#endif
+                CONFIG::list_SD_files(output);
+#if defined(SDCARD_FLAG_PIN) && SDCARD_FLAG_PIN != -1
+//restore flag state
+            if(!is_low)RELEASESD()
+#endif
+            } else {
+            BRIDGE::println(cmd_params, output);
+            BRIDGE::println("No Card", output);
+        }
+    } else {
+        BRIDGE::println(INCORRECT_CMD_MSG, output);
+        response = false;
+    }
+    break;
+#endif
+    //Save data string
+    //[ESP300]<data>pwd=<user/admin password>
+    case 300:
+        parameter = get_param(cmd_params,"", true);
+#ifdef AUTHENTICATION_FEATURE
+        if (auth_type == LEVEL_GUEST) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
+        } else
+#endif
+        {
+            if(!CONFIG::write_string(EP_DATA_STRING,parameter.c_str())) {
+                BRIDGE::println(ERROR_CMD_MSG, output);
+                response = false;
+            } else {
+                BRIDGE::println(OK_CMD_MSG, output);
+            }
+        }
+        break;
+    //get data string
+    //[ESP301] pwd=<user/admin password>
+    case 301:
+        parameter = get_param(cmd_params,"", true);
+#ifdef AUTHENTICATION_FEATURE
+        if (auth_type == LEVEL_GUEST) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
+        } else
+#endif
+        {
+            char sbuf[MAX_DATA_LENGTH+1];
+            if (CONFIG::read_string(EP_DATA_STRING, sbuf, MAX_DATA_LENGTH)) {
+                BRIDGE::println(sbuf, output);
+            } else {
+                BRIDGE::println(F("Error reading data"), output);
+            }
+        }
+        break;
+    //Get full EEPROM settings content
+    //[ESP400]
+    case 400: {
+        char sbuf[MAX_DATA_LENGTH+1];
+        uint8_t ipbuf[4];
+        byte bbuf=0;
+        int ibuf=0;
+        parameter = get_param(cmd_params,"", true);
+        delay(0);
+        //Start JSON
+        BRIDGE::println(F("{\"EEPROM\":["), output);
+        if (cmd_params == "network" || cmd_params == "") {
+            
+            //1- Baud Rate
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_BAUD_RATE), output);
+            BRIDGE::print(F("\",\"T\":\"I\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_BAUD_RATE,  (byte *)&ibuf, INTEGER_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(ibuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Baud Rate\",\"O\":[{\"9600\":\"9600\"},{\"19200\":\"19200\"},{\"38400\":\"38400\"},{\"57600\":\"57600\"},{\"115200\":\"115200\"},{\"230400\":\"230400\"},{\"250000\":\"250000\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //2-Sleep Mode
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_SLEEP_MODE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_SLEEP_MODE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Sleep Mode\",\"O\":[{\"None\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_NONE_SLEEP), output);
+            BRIDGE::print(F("\"},{\"Light\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_LIGHT_SLEEP), output);
+            BRIDGE::print(F("\"},{\"Modem\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_MODEM_SLEEP), output);
+            BRIDGE::print(F("\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //3-Web Port
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_WEB_PORT), output);
+            BRIDGE::print(F("\",\"T\":\"I\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_WEB_PORT,  (byte *)&ibuf, INTEGER_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(ibuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Web Port\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MAX_WEB_PORT), output);
+            BRIDGE::print(F("\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MIN_WEB_PORT), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //4-Data Port
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_DATA_PORT), output);
+            BRIDGE::print(F("\",\"T\":\"I\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_DATA_PORT,  (byte *)&ibuf, INTEGER_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(ibuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Data Port\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MAX_DATA_PORT), output);
+            BRIDGE::print(F("\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MIN_DATA_PORT), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+#ifdef AUTHENTICATION_FEATURE
+             //5-Admin password
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_ADMIN_PWD), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_ADMIN_PWD, sbuf, MAX_LOCAL_PASSWORD_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print("********", output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_LOCAL_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"Admin Password\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_LOCAL_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //6-User password
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_USER_PWD), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_USER_PWD, sbuf, MAX_LOCAL_PASSWORD_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print("********", output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_LOCAL_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"User Password\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_LOCAL_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+#endif
+            //7-Hostname
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_HOSTNAME), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_HOSTNAME, sbuf, MAX_HOSTNAME_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(sbuf, output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Hostname\" ,\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_HOSTNAME_LENGTH), output);
+            BRIDGE::print(F("\", \"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_HOSTNAME_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //8-wifi mode
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_WIFI_MODE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_WIFI_MODE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Wifi mode\",\"O\":[{\"AP\":\"1\"},{\"STA\":\"2\"}]}"), output);
+            BRIDGE::println(F(","), output);
+
+            //9-STA SSID
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_STA_SSID), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_STA_SSID, sbuf, MAX_SSID_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(sbuf, output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_SSID_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"Station SSID\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_SSID_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //10-STA password
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_STA_PASSWORD), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_STA_PASSWORD, sbuf, MAX_PASSWORD_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print("********", output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"Station Password\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //11-Station Network Mode
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_STA_PHY_MODE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_STA_PHY_MODE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Station Network Mode\",\"O\":[{\"11b\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_PHY_MODE_11B), output);
+            BRIDGE::print(F("\"},{\"11g\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_PHY_MODE_11G), output);
+            BRIDGE::print(F("\"},{\"11n\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_PHY_MODE_11N), output);
+            BRIDGE::print(F("\"}]}"), output);
+            BRIDGE::println(F(","), output);
+
+            //12-STA IP mode
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_STA_IP_MODE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_STA_IP_MODE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Station IP Mode\",\"O\":[{\"DHCP\":\"1\"},{\"Static\":\"2\"}]}"), output);
+            BRIDGE::println(F(","), output);
+
+            //13-STA static IP
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_STA_IP_VALUE), output);
+            BRIDGE::print(F("\",\"T\":\"A\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_STA_IP_VALUE,(byte *)ipbuf, IP_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(IPAddress(ipbuf).toString().c_str(), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Station Static IP\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //14-STA static Mask
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_STA_MASK_VALUE), output);
+            BRIDGE::print(F("\",\"T\":\"A\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_STA_MASK_VALUE,(byte *)ipbuf, IP_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(IPAddress(ipbuf).toString().c_str(), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Station Static Mask\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //15-STA static Gateway
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_STA_GATEWAY_VALUE), output);
+            BRIDGE::print(F("\",\"T\":\"A\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_STA_GATEWAY_VALUE,(byte *)ipbuf, IP_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(IPAddress(ipbuf).toString().c_str(), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Station Static Gateway\"}"), output);
+            BRIDGE::println(F(","), output);
+
+           //16-AP SSID
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AP_SSID), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_AP_SSID, sbuf, MAX_SSID_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(sbuf, output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_SSID_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"AP SSID\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_SSID_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //17-AP password
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AP_PASSWORD), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_AP_PASSWORD, sbuf, MAX_PASSWORD_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print("********", output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"AP Password\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_PASSWORD_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //18 - AP Network Mode
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AP_PHY_MODE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_AP_PHY_MODE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"AP Network Mode\",\"O\":[{\"11b\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_PHY_MODE_11B), output);
+            BRIDGE::print(F("\"},{\"11g\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(WIFI_PHY_MODE_11G), output);
+            BRIDGE::print(F("\"}]}"), output);
+            BRIDGE::println(F(","), output);
+
+            //19-AP SSID visibility
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_SSID_VISIBLE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_SSID_VISIBLE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"SSID Visible\",\"O\":[{\"No\":\"0\"},{\"Yes\":\"1\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //20-AP Channel
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_CHANNEL), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_CHANNEL, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"AP Channel\",\"O\":["), output);
+            for (int i=1; i < 12 ; i++) {
+                BRIDGE::print(F("{\""), output);
+                BRIDGE::print((const char *)CONFIG::intTostr(i), output);
+                BRIDGE::print(F("\":\""), output);
+                BRIDGE::print((const char *)CONFIG::intTostr(i), output);
+                BRIDGE::print(F("\"}"), output);
+                if (i<11) {
+                    BRIDGE::print(F(","), output);
+                }
+            }
+            BRIDGE::print(F("]}"), output);
+            BRIDGE::println(F(","), output);
+
+            //21-AP Authentication
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AUTH_TYPE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_AUTH_TYPE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Authentication\",\"O\":[{\"Open\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(AUTH_OPEN), output);
+            BRIDGE::print(F("\"},{\"WPA\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(AUTH_WPA_PSK), output);
+            BRIDGE::print(F("\"},{\"WPA2\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(AUTH_WPA2_PSK), output);
+            BRIDGE::print(F("\"},{\"WPA/WPA2\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(AUTH_WPA_WPA2_PSK), output);
+            BRIDGE::print(F("\"}]}"), output);
+            BRIDGE::println(F(","), output);
+
+            //22-AP IP mode
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AP_IP_MODE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_AP_IP_MODE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"AP IP Mode\",\"O\":[{\"DHCP\":\"1\"},{\"Static\":\"2\"}]}"), output);
+            BRIDGE::println(F(","), output);
+
+            //23-AP static IP
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AP_IP_VALUE), output);
+            BRIDGE::print(F("\",\"T\":\"A\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_AP_IP_VALUE,(byte *)ipbuf, IP_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(IPAddress(ipbuf).toString().c_str(), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"AP Static IP\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //24-AP static Mask
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AP_MASK_VALUE), output);
+            BRIDGE::print(F("\",\"T\":\"A\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_AP_MASK_VALUE,(byte *)ipbuf, IP_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(IPAddress(ipbuf).toString().c_str(), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"AP Static Mask\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //25-AP static Gateway
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_AP_GATEWAY_VALUE), output);
+            BRIDGE::print(F("\",\"T\":\"A\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_AP_GATEWAY_VALUE,(byte *)ipbuf, IP_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(IPAddress(ipbuf).toString().c_str(), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"AP Static Gateway\"}"), output);
+            delay(0);
+#ifdef TIMESTAMP_FEATURE
+            BRIDGE::println(F(","), output);
+            
+             //26-Time zone
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIMEZONE), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_TIMEZONE, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr((int8_t)bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Time Zone\",\"O\":["), output);
+            for (int i=-12; i <= 12 ; i++) {
+                BRIDGE::print(F("{\""), output);
+                BRIDGE::print((const char *)CONFIG::intTostr(i), output);
+                BRIDGE::print(F("\":\""), output);
+                BRIDGE::print((const char *)CONFIG::intTostr(i), output);
+                BRIDGE::print(F("\"}"), output);
+                if (i<12) {
+                    BRIDGE::print(F(","), output);
+                }
+            }
+            BRIDGE::print(F("]}"), output);
+            BRIDGE::println(F(","), output);
+            
+             //27- DST 
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_ISDST), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_TIME_ISDST, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Day Saving Time\",\"O\":[{\"No\":\"0\"},{\"Yes\":\"1\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //28- Time Server1
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_SERVER1), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_TIME_SERVER1, sbuf, MAX_DATA_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(sbuf, output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_DATA_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"Time Server 1\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_DATA_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //29- Time Server2
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_SERVER2), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_TIME_SERVER2, sbuf, MAX_DATA_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(sbuf, output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_DATA_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"Time Server 2\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_DATA_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //30- Time Server3
+            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_SERVER3), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_TIME_SERVER3, sbuf, MAX_DATA_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(sbuf, output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_DATA_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"Time Server 3\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_DATA_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+#endif
+        }
+        
+        if (cmd_params == "printer" || cmd_params == "") {
+            if (cmd_params == "") {
+                BRIDGE::println(F(","), output);
+            }
+            //Target FW
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_TARGET_FW), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_TARGET_FW, &bbuf )) {
+                BRIDGE::print("Unknown", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Target FW\",\"O\":[{\"Repetier\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(REPETIER), output);
+            BRIDGE::print(F("\"},{\"Repetier for Davinci\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(REPETIER4DV), output);
+            BRIDGE::print(F("\"},{\"Marlin\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MARLIN), output);
+            BRIDGE::print(F("\"},{\"Marlin Kimbra\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MARLINKIMBRA), output);
+            BRIDGE::print(F("\"},{\"Smoothieware\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(SMOOTHIEWARE), output);
+            BRIDGE::print(F("\"},{\"Unknown\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(UNKNOWN_FW), output);
+            BRIDGE::print(F("\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+#if defined(SDCARD_FEATURE)
+            //Direct SD 
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_IS_DIRECT_SD), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_IS_DIRECT_SD, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Direct SD access\",\"O\":[{\"No\":\"0\"},{\"Yes\":\"1\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //Direct SD Check
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_DIRECT_SD_CHECK), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_DIRECT_SD_CHECK, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Direct SD Boot Check\",\"O\":[{\"No\":\"0\"},{\"Yes\":\"1\"}]}"), output);
+            BRIDGE::println(F(","), output);
+#endif
+            //Primary SD 
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_PRIMARY_SD), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_PRIMARY_SD, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Primary SD\",\"O\":[{\"None\":\"0\"},{\"/sd/\":\"1\"},{\"/ext/\":\"2\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //Secondary SD 
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_SECONDARY_SD), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_SECONDARY_SD, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Secondary SD\",\"O\":[{\"None\":\"0\"},{\"/sd/\":\"1\"},{\"/ext/\":\"2\"}]}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //Refresh time 1
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_REFRESH_PAGE_TIME), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_REFRESH_PAGE_TIME, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Temperature Refresh Time\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MAX_REFRESH), output);
+            BRIDGE::print(F("\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MIN_REFRESH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+            
+            //Refresh time 2
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_REFRESH_PAGE_TIME2), output);
+            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
+            if (!CONFIG::read_byte(EP_REFRESH_PAGE_TIME2, &bbuf )) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Position Refresh Time\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MAX_REFRESH), output);
+            BRIDGE::print(F("\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MIN_REFRESH), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //XY feedrate
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_XY_FEEDRATE), output);
+            BRIDGE::print(F("\",\"T\":\"I\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_XY_FEEDRATE,  (byte *)&ibuf, INTEGER_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(ibuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"XY feedrate\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MAX_XY_FEEDRATE), output);
+            BRIDGE::print(F("\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MIN_XY_FEEDRATE), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //Z feedrate
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_Z_FEEDRATE), output);
+            BRIDGE::print(F("\",\"T\":\"I\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_Z_FEEDRATE,  (byte *)&ibuf, INTEGER_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(ibuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"Z feedrate\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MAX_Z_FEEDRATE), output);
+            BRIDGE::print(F("\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MIN_Z_FEEDRATE), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //E feedrate
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_E_FEEDRATE), output);
+            BRIDGE::print(F("\",\"T\":\"I\",\"V\":\""), output);
+            if (!CONFIG::read_buffer(EP_E_FEEDRATE,  (byte *)&ibuf, INTEGER_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print((const char *)CONFIG::intTostr(ibuf), output);
+            }
+            BRIDGE::print(F("\",\"H\":\"E feedrate\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MAX_E_FEEDRATE), output);
+            BRIDGE::print(F("\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(DEFAULT_MIN_E_FEEDRATE), output);
+            BRIDGE::print(F("\"}"), output);
+            BRIDGE::println(F(","), output);
+
+            //Camera address, data string
+            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(EP_DATA_STRING), output);
+            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
+            if (!CONFIG::read_string(EP_DATA_STRING, sbuf, MAX_DATA_LENGTH)) {
+                BRIDGE::print("???", output);
+            } else {
+                BRIDGE::print(sbuf, output);
+            }
+            BRIDGE::print(F("\",\"S\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MAX_DATA_LENGTH), output);
+            BRIDGE::print(F("\",\"H\":\"Camera address\",\"M\":\""), output);
+            BRIDGE::print((const char *)CONFIG::intTostr(MIN_DATA_LENGTH), output);
+            BRIDGE::print(F("\"}"), output);
+        }
+
+        //end JSON
+        BRIDGE::println(F("\n]}"), output);
+        delay(0);
+    }
+    break;
+
+    //Set EEPROM setting
+    //[ESP401]P=<position> T=<type> V=<value> pwd=<user/admin password>
+    case 401: {
+        //check validity of parameters
+        String spos = get_param(cmd_params,"P=", false);
+        String styp = get_param(cmd_params,"T=", false);
+        String sval = get_param(cmd_params,"V=", true);
+        sval.trim();
+        int pos = spos.toInt();
+        if ((pos == 0 && spos != "0") || (pos > LAST_EEPROM_ADDRESS || pos < 0)) {
+            response = false;
+        }
+        if (!(styp == "B" || styp == "S" || styp == "A" || styp == "I")) {
+            response = false;
+        }
+        if (sval.length() == 0) {
+            response = false;
+        }
+
+
+#ifdef AUTHENTICATION_FEATURE
+        if (response) {
+            //check authentication
+            level_authenticate_type auth_need = LEVEL_ADMIN;
+            for (int i = 0; i < AUTH_ENTRY_NB; i++) {
+                if (Setting[i][0] == pos ) {
+                    auth_need = (level_authenticate_type)(Setting[i][1]);
+                    i = AUTH_ENTRY_NB;
+                }
+            }
+            if ((auth_need == LEVEL_ADMIN && auth_type == LEVEL_USER) || (auth_type == LEVEL_GUEST)) {
+                response = false;
+            }
+        }
+#endif
+        if (response) {
+            if (styp == "B") {
+                byte bbuf = sval.toInt();
+                if(!CONFIG::write_byte(pos,bbuf)) {
+                    response = false;
+                    } else {
+                    //dynamique refresh is better than restart the board
+                    if (pos == EP_TARGET_FW)CONFIG::InitFirmwareTarget();
+                    if (pos == EP_IS_DIRECT_SD){
+                        CONFIG::InitDirectSD();
+                        if (CONFIG::is_direct_sd) CONFIG::InitPins();
+                    }
+#if defined(TIMESTAMP_FEATURE)
+                    if ((pos == EP_TIMEZONE) || (pos == EP_TIME_ISDST) || (pos == EP_TIME_SERVER1) || (pos == EP_TIME_SERVER2) || (pos == EP_TIME_SERVER3))CONFIG::init_time_client();
+#endif
+                    }
+                }
+            if (styp == "I") {
+                int ibuf = sval.toInt();
+                if(!CONFIG::write_buffer(pos,(const byte *)&ibuf,INTEGER_LENGTH)) {
+                    response = false;
+                }
+            }
+            if (styp == "S") {
+                if(!CONFIG::write_string(pos,sval.c_str())) {
+                    response = false;
+                }
+            }
+            if (styp == "A") {
+                byte ipbuf[4];
+                if (CONFIG::split_ip(sval.c_str(),ipbuf) < 4) {
+                    response = false;
+                } else if(!CONFIG::write_buffer(pos,ipbuf,IP_LENGTH)) {
+                    response = false;
+                }
+            }
+        }
+        if(!response) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+        } else {
+            BRIDGE::println(OK_CMD_MSG, output);
+        }
+
+    }
+    break;
+    
+    //Get available AP list (limited to 30)
+    //output is JSON or plain text according parameter
+    //[ESP410]<plain>
+    case 410: {
+		parameter = get_param(cmd_params,"", true);
+		int n = WiFi.scanNetworks();
+		bool plain = parameter == "plain";
+        if (!plain)BRIDGE::print(F("{\"AP_LIST\":["), output);
+        for (int i = 0; i < n; ++i) {
+                if (i>0) {
+                   if (!plain) BRIDGE::print(F(","), output);
+                   else BRIDGE::print(F("\n"), output);
+                }
+                if (!plain)BRIDGE::print(F("{\"SSID\":\""), output);
+                BRIDGE::print(WiFi.SSID(i).c_str(), output);
+                if (!plain)BRIDGE::print(F("\",\"SIGNAL\":\""), output);
+                else BRIDGE::print(F("\t"), output);
+                BRIDGE::print(CONFIG::intTostr(wifi_config.getSignal(WiFi.RSSI(i))), output);;
+                //BRIDGE::print(F("%"), output);
+                if (!plain)BRIDGE::print(F("\",\"IS_PROTECTED\":\""), output);
+                if (WiFi.encryptionType(i) == ENC_TYPE_NONE) {
+                    if (!plain)BRIDGE::print(F("0"), output);
+                    else BRIDGE::print(F("\tOpen"), output);
+                } else {
+                    if (!plain)BRIDGE::print(F("1"), output);
+                    else BRIDGE::print(F("\tSecure"), output);
+                }
+                if (!plain)BRIDGE::print(F("\"}"), output);
+            }
+        if (!plain)BRIDGE::print(F("]}"), output);
+        WiFi.scanDelete();
+	}
+	break;
+	//Get ESP current status in plain or JSON
+    //[ESP420]<plain>
+    case 420: {
+		parameter = get_param(cmd_params,"", true);
+        CONFIG::print_config(output, (parameter == "plain"));
+	}
+	break;
+    //Set ESP mode
+    //cmd is RESET, SAFEMODE, RESTART
     //[ESP444]<cmd>pwd=<admin password>
     case 444:
         parameter = get_param(cmd_params,"", true);
 #ifdef AUTHENTICATION_FEATURE
-        if (!isadmin(cmd_params)) {
-            Serial.println(INCORRECT_CMD_MSG);
+        if (auth_type != LEVEL_ADMIN) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         } else
 #endif
         {
             if (parameter=="RESET") {
                 CONFIG::reset_config();
-            }
-            if (parameter=="SAFEMODE") {
+                BRIDGE::println(F("Reset done - restart neded"), output);
+            } else if (parameter=="SAFEMODE") {
                 wifi_config.Safe_Setup();
-            }
-            if (parameter=="RESTART") {
+                 BRIDGE::println(F("Set Safe Mode  - restart neded"), output);
+            } else  if (parameter=="RESTART") {
+                 BRIDGE::println(F("Restart started"), output);
+                 BRIDGE::flush( output);
                 CONFIG::esp_restart();
+            } else {
+                BRIDGE::println(INCORRECT_CMD_MSG, output);
+                response = false;
             }
-        }
-        if (parameter=="CONFIG") {
-            CONFIG::print_config();
         }
         break;
 #ifdef AUTHENTICATION_FEATURE
     //Change / Reset user password
     //[ESP555]<password>pwd=<admin password>
     case 555: {
-        if (isadmin(cmd_params)) {
+        if (auth_type == LEVEL_ADMIN) {
             parameter = get_param(cmd_params,"", true);
             if (parameter.length() == 0) {
                 if(CONFIG::write_string(EP_USER_PWD,FPSTR(DEFAULT_USER_PWD))) {
-                    Serial.println(OK_CMD_MSG);
+                    BRIDGE::println(OK_CMD_MSG, output);
                 } else {
-                    Serial.println(ERROR_CMD_MSG);
+                    BRIDGE::println(ERROR_CMD_MSG, output);
+                    response = false;
                 }
             } else {
                 if (CONFIG::isLocalPasswordValid(parameter.c_str())) {
                     if(CONFIG::write_string(EP_USER_PWD,parameter.c_str())) {
-                        Serial.println(OK_CMD_MSG);
+                        BRIDGE::println(OK_CMD_MSG, output);
                     } else {
-                        Serial.println(ERROR_CMD_MSG);
+                        BRIDGE::println(ERROR_CMD_MSG, output);
+                        response = false;
                     }
                 } else {
-                    Serial.println(INCORRECT_CMD_MSG);
+                    BRIDGE::println(INCORRECT_CMD_MSG, output);
+                    response = false;
                 }
             }
         } else {
-            Serial.println(INCORRECT_CMD_MSG);
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
         }
         break;
     }
@@ -408,43 +1358,103 @@ void COMMAND::execute_command(int cmd,String cmd_params)
             String currentline = currentfile.readString();
             //until no line in file
             while (currentline.length() >0) {
-                //send line to serial
-                Serial.println(currentline);
-                //flush to be sure send buffer is empty
-                delay(0);
-                Serial.flush();
+                int ESPpos = currentline.indexOf("[ESP");
+                if (ESPpos>-1) {
+                    //is there the second part?
+                    int ESPpos2 = currentline.indexOf("]",ESPpos);
+                    if (ESPpos2>-1) {
+                        //Split in command and parameters
+                        String cmd_part1=currentline.substring(ESPpos+4,ESPpos2);
+                        String cmd_part2="";
+                        //is there space for parameters?
+                        if (ESPpos2<currentline.length()) {
+                            cmd_part2=currentline.substring(ESPpos2+1);
+                        }
+                        //if command is a valid number then execute command
+                        if(cmd_part1.toInt()!=0) {
+                            execute_command(cmd_part1.toInt(),cmd_part2,NO_PIPE);
+                        }
+                        //if not is not a valid [ESPXXX] command ignore it
+                    }
+                } else {
+                    //send line to serial
+                    Serial.println(currentline);
+                    //flush to be sure send buffer is empty
+                    delay(0);
+                    Serial.flush();
+                }
                 currentline="";
                 //read next line if any
                 currentline = currentfile.readString();
             }
             currentfile.close();
+            BRIDGE::println(OK_CMD_MSG, output);
+        } else {
+            BRIDGE::println(ERROR_CMD_MSG, output);
+            response = false;
         }
+
         break;
     }
-    //get fw version
+    //get fw version firmare target and fw version
     //[ESP800]<header answer>
     case 800:
-        Serial.print(cmd_params);
-        Serial.print("\nFW version:");
-        Serial.println(FW_VERSION);
+    {
+        byte sd_dir = 0;
+        BRIDGE::print(cmd_params, output);
+        BRIDGE::print(F("FW version:"), output);
+        BRIDGE::print(FW_VERSION, output);
+        BRIDGE::print(F(" # FW target:"), output);
+        BRIDGE::print(CONFIG::GetFirmwareTargetShortName(), output);      
+        BRIDGE::print(F(" # FW HW:"), output);
+        if (CONFIG::is_direct_sd) BRIDGE::print(F("Direct SD"), output);
+        else  BRIDGE::print(F("Serial SD"), output);
+        BRIDGE::print(F(" # primary sd:"), output);
+        if (!CONFIG::read_byte(EP_PRIMARY_SD, &sd_dir )) sd_dir = DEFAULT_PRIMARY_SD;
+        if (sd_dir == SD_DIRECTORY) BRIDGE::print(F("/sd/"), output);
+        else if (sd_dir == EXT_DIRECTORY) BRIDGE::print(F("/ext/"), output);
+        else BRIDGE::print(F("none"), output);
+        BRIDGE::print(F(" # secondary sd:"), output);
+        if (!CONFIG::read_byte(EP_SECONDARY_SD, &sd_dir )) sd_dir = DEFAULT_SECONDARY_SD;
+        if (sd_dir == SD_DIRECTORY) BRIDGE::print(F("/sd/"), output);
+        else if (sd_dir == EXT_DIRECTORY) BRIDGE::print(F("/ext/"), output);
+        else BRIDGE::print(F("none"), output);
+        BRIDGE::println("", output);
+    }
+        break;
+    //get fw target
+    //[ESP801]<header answer>
+    case 801:
+        BRIDGE::print(cmd_params, output);
+        BRIDGE::println(CONFIG::GetFirmwareTargetShortName(), output);
         break;
     //clear status/error/info list
+    case 802:
+        if (CONFIG::check_update_presence( ))  BRIDGE::println("yes", output);
+        else BRIDGE::println("no", output);
+        break;
     //[ESP999]<cmd>
     case 999:
         cmd_params.trim();
 #ifdef ERROR_MSG_FEATURE
         if (cmd_params=="ERROR") {
             web_interface->error_msg.clear();
+            BRIDGE::println(OK_CMD_MSG, output);
+            break;
         }
 #endif
 #ifdef INFO_MSG_FEATURE
         if (cmd_params=="INFO") {
             web_interface->info_msg.clear();
+            BRIDGE::println(OK_CMD_MSG, output);
+            break;
         }
 #endif
 #ifdef STATUS_MSG_FEATURE
         if (cmd_params=="STATUS") {
             web_interface->status_msg.clear();
+            BRIDGE::println(OK_CMD_MSG, output);
+            break;
         }
 #endif
         if (cmd_params=="ALL") {
@@ -457,78 +1467,72 @@ void COMMAND::execute_command(int cmd,String cmd_params)
 #ifdef INFO_MSG_FEATURE
             web_interface->info_msg.clear();
 #endif
+            BRIDGE::println(OK_CMD_MSG, output);
+            break;
         }
-        break;
-        //default:
-
+    default:
+        BRIDGE::println(INCORRECT_CMD_MSG, output);
+        response = false;
     }
+    return response;
 }
 
-void COMMAND::check_command(String buffer)
+bool COMMAND::check_command(String buffer, tpipe output, bool handlelockserial)
 {
     String buffer2;
-//if direct access to SDCard no need to handle the M20 command answer
-#ifndef DIRECT_SDCARD_FEATURE
-    static bool bfileslist=false;
-    static uint32_t start_list=0;
-    //if SD list is not on going
-    if (!bfileslist) {
-        //check if command is a start of SD File list
-        int filesstart = buffer.indexOf("Begin file list");
-        //yes it is file list starting to be displayed
-        if (filesstart>-1) {
-            //init time out
-            start_list = millis();
-            //set file list started
-            bfileslist=true;
-            //clear current list
-            web_interface->fileslist.clear();
-            //block any new output to serial from ESP to avoid pollution
-            (web_interface->blockserial) = true;
-            return;
+    LOG("Check Command:")
+    LOG(buffer)
+    LOG("\r\n")
+    bool is_temp = false;
+    if ((buffer.indexOf("T:") > -1 ) || (buffer.indexOf("B:") > -1 )) is_temp = true;
+    //feed the WD for safety
+    delay(0);
+    if (( CONFIG::GetFirmwareTarget()  == REPETIER4DV) || (CONFIG::GetFirmwareTarget() == REPETIER)) {
+        //save time no need to continue
+        if ((buffer.indexOf("busy:") > -1) || (buffer.startsWith("wait"))) {
+            return false;
         }
-#endif
-#ifdef TEMP_MONITORING_FEATURE
-        int Tpos = buffer.indexOf("T:");
-#endif
-#ifdef POS_MONITORING_FEATURE
-        int Xpos = buffer.indexOf("X:");
-        int Ypos = buffer.indexOf("Y:");
-        int Zpos = buffer.indexOf("Z:");
-#endif
-#if FIRMWARE_TARGET == SMOOTHIEWARE
-#ifdef SPEED_MONITORING_FEATURE
-        int Speedpos = buffer.indexOf("Speed factor at ");
-#endif
-#ifdef FLOW_MONITORING_FEATURE
-        int Flowpos = buffer.indexOf("Flow rate at ");
-#endif
+        if (buffer.startsWith("ok")) {
+            return false;
+        }
+    }   
 #ifdef ERROR_MSG_FEATURE
-        int Errorpos= buffer.indexOf("error:");
+        int Errorpos = -1;
 #endif
 #ifdef INFO_MSG_FEATURE
-        int Infopos= buffer.indexOf("info:");
+        int Infopos = -1;
 #endif
 #ifdef STATUS_MSG_FEATURE
-        int Statuspos= buffer.indexOf("warning:");
+        int Statuspos = -1;
 #endif
-#else
-#ifdef SPEED_MONITORING_FEATURE
-        int Speedpos = buffer.indexOf("SpeedMultiply:");
-#endif
-#ifdef FLOW_MONITORING_FEATURE
-        int Flowpos = buffer.indexOf("FlowMultiply:");
-#endif
+if (CONFIG::GetFirmwareTarget()  == SMOOTHIEWARE) {
 #ifdef ERROR_MSG_FEATURE
-        int Errorpos= buffer.indexOf("Error:");
+        Errorpos= buffer.indexOf("error:");
 #endif
 #ifdef INFO_MSG_FEATURE
-        int Infopos= buffer.indexOf("Info:");
+        Infopos= buffer.indexOf("info:");
 #endif
 #ifdef STATUS_MSG_FEATURE
-        int Statuspos= buffer.indexOf("Status:");
+        Statuspos= buffer.indexOf("warning:");
 #endif
+} else {
+#ifdef ERROR_MSG_FEATURE
+        Errorpos= buffer.indexOf("Error:");
 #endif
+#ifdef INFO_MSG_FEATURE
+        Infopos= buffer.indexOf("Info:");
+#endif
+#ifdef STATUS_MSG_FEATURE
+    Statuspos= -1;
+    if (CONFIG::GetFirmwareTarget()  == MARLIN){
+        Statuspos= buffer.indexOf("echo:");
+    }
+    else {
+        Statuspos= buffer.indexOf("Status:");
+    }
+
+#endif
+}
 
 #ifdef SERIAL_COMMAND_FEATURE
         String ESP_Command;
@@ -546,104 +1550,44 @@ void COMMAND::check_command(String buffer)
                 }
                 //if command is a valid number then execute command
                 if(cmd_part1.toInt()!=0) {
-                    execute_command(cmd_part1.toInt(),cmd_part2);
+                    execute_command(cmd_part1.toInt(),cmd_part2,output);
                 }
                 //if not is not a valid [ESPXXX] command
             }
         }
 #endif
-#ifdef TEMP_MONITORING_FEATURE
-        //check for temperature
-        if (Tpos>-1) {
-            //look for valid temperature answer
-            int slashpos = buffer.indexOf(" /",Tpos);
-            int spacepos = buffer.indexOf(" ",slashpos+1);
-            //if match mask T:xxx.xx /xxx.xx
-            if(spacepos-Tpos < 17) {
-                web_interface->answer4M105=buffer; //do not interprete just need when requested so store it
-                web_interface->last_temp=millis();
-            }
-        }
-#endif
-#ifdef POS_MONITORING_FEATURE
-        //Position of axis
-        if (Xpos>-1 && Ypos>-1 && Zpos>-1) {
-            web_interface->answer4M114=buffer;
-        }
-#endif
-#ifdef SPEED_MONITORING_FEATURE
-        //Speed
-        if (Speedpos>-1) {
-            //get just the value
-#if FIRMWARE_TARGET == SMOOTHIEWARE
-            buffer2 =buffer.substring(Speedpos+16);
-            int p2 = buffer2.indexOf(".");
-            web_interface->answer4M220=buffer2.substring(0,p2);
-#else
-            web_interface->answer4M220=buffer.substring(Speedpos+14);
-#endif
-        }
-#endif
-#ifdef FLOW_MONITORING_FEATURE
-        //Flow
-        if (Flowpos>-1) {
-            //get just the value
-#if FIRMWARE_TARGET == SMOOTHIEWARE
-            buffer2 =buffer.substring(Flowpos+13);
-            int p2 = buffer2.indexOf(".");
-            web_interface->answer4M221=buffer2.substring(0,p2);
-#else
-            web_interface->answer4M221=buffer.substring(Flowpos+13);
-#endif
-        }
-#endif
 #ifdef ERROR_MSG_FEATURE
         //Error
         if (Errorpos>-1 && !(buffer.indexOf("Format error")!=-1 || buffer.indexOf("wait")==Errorpos+6) ) {
-            (web_interface->error_msg).add(buffer.substring(Errorpos+6).c_str());
+            String ss = buffer.substring(Errorpos+6);
+            ss.replace("\"","");
+            ss.replace("'","");
+            (web_interface->error_msg).add(ss.c_str());
         }
 #endif
 #ifdef INFO_MSG_FEATURE
         //Info
         if (Infopos>-1) {
-            (web_interface->info_msg).add(buffer.substring(Infopos+5).c_str());
+            String ss = buffer.substring(Errorpos+5);
+            ss.replace("\"","");
+            ss.replace("'","");
+            (web_interface->info_msg).add(ss.c_str());
         }
 #endif
 #ifdef STATUS_MSG_FEATURE
         //Status
         if (Statuspos>-1) {
-#if FIRMWARE_TARGET == SMOOTHIEWARE
-            (web_interface->status_msg).add(buffer.substring(Statuspos+8).c_str());
-#else
-            (web_interface->status_msg).add(buffer.substring(Statuspos+7).c_str());
-#endif
+            String ss ;
+            if (CONFIG::GetFirmwareTarget() == SMOOTHIEWARE)ss = buffer.substring(Errorpos+8);
+            else if (CONFIG::GetFirmwareTarget() == MARLIN) ss = buffer.substring(Errorpos+5);
+            else ss = buffer.substring(Errorpos+7);
+            ss.replace("\"","");
+            ss.replace("'","");
+            (web_interface->info_msg).add(ss.c_str());
         }
 #endif
-#ifndef DIRECT_SDCARD_FEATURE
-    } else { //listing file is on going
-        //check if we are too long
-        if ((millis()-start_list)>30000) { //timeout in case of problem
-            bfileslist=false;
-            (web_interface->blockserial) = false; //release serial
-            LOG("Time out\n");
-        } else {
-            //check if this is the end
-            if (buffer.indexOf("End file list")>-1) {
-                bfileslist=false;
-                (web_interface->blockserial) = false;
-                LOG("End list\n");
-            } else {
-                //Serial.print(buffer);
-                //add list to buffer
-                web_interface->fileslist.add(buffer);
-                LOG(String(web_interface->fileslist.size()));
-                LOG(":");
-                LOG(buffer);
-                LOG('\n');
-            }
-        }
-    }
-#endif
+    
+    return is_temp;
 }
 
 //read a buffer in an array
@@ -655,6 +1599,7 @@ void COMMAND::read_buffer_serial(uint8_t *b, size_t len)
     }
 }
 
+#ifdef TCP_IP_DATA_FEATURE
 //read buffer as char
 void COMMAND::read_buffer_tcp(uint8_t b)
 {
@@ -680,16 +1625,16 @@ void COMMAND::read_buffer_tcp(uint8_t b)
         previous_was_char=false; //next call will reset the buffer
     }
 //this is not printable but end of command check if need to handle it
-    if (b==13 ||b==10) {
+    if (b==13 || b==10) {
         //reset comment flag
         iscomment = false;
         //Minimum is something like M10 so 3 char
         if (buffer_tcp.length()>3) {
-            check_command(buffer_tcp);
+            check_command(buffer_tcp, TCP_PIPE);
         }
     }
 }
-
+#endif
 //read buffer as char
 void COMMAND::read_buffer_serial(uint8_t b)
 {
@@ -714,12 +1659,12 @@ void COMMAND::read_buffer_serial(uint8_t b)
         previous_was_char=false; //next call will reset the buffer
     }
 //this is not printable but end of command check if need to handle it
-    if (b==13) {
+    if (b==13 || b==10) {
         //reset comment flag
         iscomment = false;
         //Minimum is something like M10 so 3 char
         if (buffer_serial.length()>3) {
-            check_command(buffer_serial);
+            check_command(buffer_serial, SERIAL_PIPE);
         }
     }
 }

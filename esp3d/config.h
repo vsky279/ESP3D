@@ -19,14 +19,14 @@
 */
 
 //definition
-#define REPETIER		0
+#define UNKNOWN_FW 0
 #define REPETIER4DV	1
 #define MARLIN		2
 #define MARLINKIMBRA		3
 #define SMOOTHIEWARE	4
+#define REPETIER		5
 
-//FIRMWARE_TARGET: the targeted FW, can be REPETIER (Original Repetier)/ REPETIER4DV (Repetier for Davinci) / MARLIN (Marlin)/ SMOOTHIEWARE (Smoothieware)
-#define FIRMWARE_TARGET SMOOTHIEWARE
+#define MAX_FW_ID REPETIER
 
 //number of clients allowed to use data port at once
 #define MAX_SRV_CLIENTS 1
@@ -40,13 +40,13 @@
 #define SSDP_FEATURE
 
 //NETBIOS_FEATURE: this feature is a discovery protocol, supported on Windows out of the box
-//#define NETBIOS_FEATURE
+#define NETBIOS_FEATURE
 
 //CAPTIVE_PORTAL_FEATURE: In SoftAP redirect all unknow call to main page
 #define CAPTIVE_PORTAL_FEATURE
 
 //AUTHENTICATION_FEATURE: protect pages by login password
-#define AUTHENTICATION_FEATURE
+//#define AUTHENTICATION_FEATURE
 
 //WEB_UPDATE_FEATURE: allow to flash fw using web UI
 #define WEB_UPDATE_FEATURE
@@ -58,7 +58,7 @@
 #define TCP_IP_DATA_FEATURE
 
 //RECOVERY_FEATURE: allow to use GPIO2 pin as hardware reset for EEPROM, add 8s to boot time to let user to jump GPIO2 to GND
-#define RECOVERY_FEATURE
+//#define RECOVERY_FEATURE
 
 #ifdef RECOVERY_FEATURE
 //pin used to reset setting
@@ -77,40 +77,75 @@
 //STATUS_MSG_FEATURE: catch the status msg and filter it to specific table
 #define STATUS_MSG_FEATURE
 
-//TEMP_MONITORING_FEATURE : catch the specific answer and store it to variable
-#define TEMP_MONITORING_FEATURE
-//SPEED_MONITORING_FEATURE : catch the specific answer and store it to variable
-#define SPEED_MONITORING_FEATURE
-//POS_MONITORING_FEATURE : catch the specific answer and store it to variable
-#define POS_MONITORING_FEATURE
-//FLOW_MONITORING_FEATURE : catch the specific answer and store it to variable
-#define FLOW_MONITORING_FEATURE
+//Serial rx buffer size is 256 but can be extended
+#define SERIAL_RX_BUFFER_SIZE 512
 
+//SDCARD_FEATURE: to access SD Card files directly instead of access by serial using printer Board FW
+//#define SDCARD_FEATURE
+
+//TIMESTAMP_FEATURE: Time stamp feature on direct SD  files
+//#define TIMESTAMP_FEATURE
+
+//WEBHOST_SDCARD_FEATURE : to use SDCard to host webpages
+//NOT YET IMPLEMENTED!!!
+//#define WEBHOST_SDCARD_FEATURE
+
+//Each time we want to access SD for reading or writing the flag need to be low
+//when action is done flag must be high to give back to main board
+#if defined(SDCARD_FLAG_PIN) && SDCARD_FLAG_PIN != -1
+#define ACCESSSD() {digitalWrite(SDCARD_FLAG_PIN, LOW);LOG("SD Flag to low\r\n")}
+#define RELEASESD() {digitalWrite(SDCARD_FLAG_PIN, HIGH);LOG("SD Flag to high\r\n") delay(50);}
+#else
+#define ACCESSSD() {}
+#define RELEASESD() {}
+#endif
 
 //DEBUG Flag do not do this when connected to printer !!!
+//be noted all upload may failed if enabled
 //#define DEBUG_ESP3D
 //#define DEBUG_OUTPUT_SPIFFS
 //#define DEBUG_OUTPUT_SD
 //#define DEBUG_OUTPUT_SERIAL
+//#define DEBUG_OUTPUT_TCP
 
+//store performance result in storestring variable : info_msg / status_msg
+//#define DEBUG_PERFORMANCE
+#define DEBUG_PERF_VARIABLE  (web_interface->info_msg)
+/*
+#ifndef FS_NO_GLOBALS
+#define FS_NO_GLOBALS
+#endif
 #include <FS.h>
+#define DEBUG_ESP3D(string) {FSFILE logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
+*/
 
 #ifdef DEBUG_ESP3D
 #ifdef DEBUG_OUTPUT_SPIFFS
-#define LOG(string) {FSFILE logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
-#else
 #ifdef SDCARD_FEATURE
+#ifndef FS_NO_GLOBALS
+#define FS_NO_GLOBALS
+#endif
+#endif
+#include <FS.h>
+#define DEBUG_PIPE NO_PIPE
+#define LOG(string) {FSFILE logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
+#endif
 #ifdef DEBUG_OUTPUT_SD
-#define LOG(string) {if(CONFIG::hasSD()){LOCKSD() File logfile = SD.open("/log.txt", "a+");logfile.print(string);logfile.close();RELEASESD()}}
-#else
-#define LOG(string) {Serial.print(string);}
+#define DEBUG_PIPE NO_PIPE
+#define LOG(string) {if(CONFIG::hasSD()){ACCESSSD() File logfile = SD.open("/log.txt", "a+");logfile.print(string);logfile.close();RELEASESD()}}
 #endif
-#else
+#ifdef DEBUG_OUTPUT_SERIAL
 #define LOG(string) {Serial.print(string);}
+#define DEBUG_PIPE SERIAL_PIPE
 #endif
+#ifdef DEBUG_OUTPUT_TCP
+#include "bridge.h"
+#define LOG(string) {BRIDGE::send2TCP(string);}
+#define DEBUG_PIPE TCP_PIPE
 #endif
 #else
 #define LOG(string) {}
+#define DEBUG_PIPE NO_PIPE
 #endif
 
 #ifdef SDCARD_FEATURE
@@ -123,11 +158,6 @@
 #define FSINFO FSInfo
 #endif
 
-#ifndef TCP_IP_DATA_FEATURE
-#undef MAX_SRV_CLIENTS
-#define MAX_SRV_CLIENTS 0
-#endif
-
 #ifndef CONFIG_h
 #define CONFIG_h
 
@@ -135,10 +165,35 @@
 extern "C" {
 #include "user_interface.h"
 }
+#ifdef SDCARD_FEATURE
+#include "SdFat.h"
+extern SdFat SD;
+#endif
 #include "wifi.h"
 //version and sources location
-#define FW_VERSION "0.8.50"
+#define FW_VERSION "0.9.601"
 #define REPOSITORY "https://github.com/luc-github/ESP3D"
+
+typedef enum {
+    NO_PIPE = 0,
+    SERIAL_PIPE = 2,
+    SERIAL1_PIPE = 3,
+#ifdef TCP_IP_DATA_FEATURE
+    TCP_PIPE = 4,
+#endif
+    WEB_PIPE = 5
+} tpipe;
+
+typedef enum {
+    LEVEL_GUEST = 0,
+    LEVEL_USER = 1,
+    LEVEL_ADMIN = 2
+} level_authenticate_type;
+
+
+#define  NO_SD 0
+#define    SD_DIRECTORY 1
+#define    EXT_DIRECTORY 2
 
 
 //flags
@@ -177,9 +232,23 @@ extern "C" {
 #define EP_AP_MASK_VALUE			320  //4  bytes xxx.xxx.xxx.xxx
 #define EP_AP_GATEWAY_VALUE			324  //4  bytes xxx.xxx.xxx.xxx
 #define EP_AP_IP_MODE			329   //1 byte = flag
-#define EP_AP_PHY_MODE			182  //1 byte = flag
-//next available is 330
-//space left 512 - 330 = 18
+#define EP_AP_PHY_MODE			330  //1 byte = flag
+#define EP_DATA_STRING			331  //129 bytes 128+1 = string  ; warning does not support multibyte char like chinese
+#define EP_REFRESH_PAGE_TIME2		460 //1  bytes = flag
+#define EP_TARGET_FW		461 //1  bytes = flag
+#define EP_TIMEZONE         462//1  bytes = flag
+#define EP_TIME_ISDST       463//1  bytes = flag
+#define EP_TIME_SERVER1 464//129 bytes 128+1 = string  ; warning does not support multibyte char like chinese  
+#define EP_TIME_SERVER2  593 //129 bytes 128+1 = string  ; warning does not support multibyte char like chinese
+#define EP_TIME_SERVER3  722 //129 bytes 128+1 = string  ; warning does not support multibyte char like chinese
+#define EP_IS_DIRECT_SD   850//1  bytes = flag
+#define EP_PRIMARY_SD   851//1  bytes = flag
+#define EP_SECONDARY_SD   852//1  bytes = flag
+#define EP_DIRECT_SD_CHECK   853//1  bytes = flag
+
+#define LAST_EEPROM_ADDRESS 854
+//next available is 854
+//space left 1024 - 854 = 170
 
 //default values
 #define DEFAULT_WIFI_MODE			AP_MODE
@@ -211,24 +280,105 @@ const char DEFAULT_ADMIN_PWD []  PROGMEM =	"admin";
 const char DEFAULT_USER_PWD []  PROGMEM =	"user";
 const char DEFAULT_ADMIN_LOGIN []  PROGMEM =	"admin";
 const char DEFAULT_USER_LOGIN []  PROGMEM =	"user";
+const char DEFAULT_TIME_SERVER1 []  PROGMEM =	"time.nist.gov";
+const char DEFAULT_TIME_SERVER2 []  PROGMEM =	"0.pool.ntp.org";
+const char DEFAULT_TIME_SERVER3 []  PROGMEM =	"1.pool.ntp.org";
+#define DEFAULT_TIME_ZONE			1
+#define DEFAULT_TIME_DST			0
+#define DEFAULT_PRIMARY_SD  1
+#define DEFAULT_SECONDARY_SD 2
+#define DEFAULT_DIRECT_SD_CHECK 0
 
+#ifdef SDCARD_FEATURE
+#define DEFAULT_IS_DIRECT_SD 1
+#else
+#define DEFAULT_IS_DIRECT_SD 0
+#endif
+
+
+
+const uint16_t Setting[][2] = {
+    {EP_WIFI_MODE, LEVEL_ADMIN},//0
+    {EP_STA_SSID, LEVEL_ADMIN},//1
+    {EP_STA_PASSWORD, LEVEL_ADMIN},//2
+    {EP_STA_IP_MODE, LEVEL_ADMIN},//3
+    {EP_STA_IP_VALUE, LEVEL_ADMIN},//4
+    {EP_STA_MASK_VALUE, LEVEL_ADMIN},//5
+    {EP_STA_GATEWAY_VALUE, LEVEL_ADMIN},//6
+    {EP_BAUD_RATE, LEVEL_ADMIN},//7
+    {EP_STA_PHY_MODE, LEVEL_ADMIN},//8
+    {EP_SLEEP_MODE, LEVEL_ADMIN},//9
+    {EP_CHANNEL, LEVEL_ADMIN},//10
+    {EP_AUTH_TYPE, LEVEL_ADMIN},//11
+    {EP_SSID_VISIBLE, LEVEL_ADMIN},//12
+    {EP_WEB_PORT, LEVEL_ADMIN},//13
+    {EP_DATA_PORT, LEVEL_ADMIN},//14
+    {EP_REFRESH_PAGE_TIME, LEVEL_USER},//15
+    {EP_HOSTNAME, LEVEL_ADMIN},//16
+    {EP_XY_FEEDRATE, LEVEL_USER},//17
+    {EP_Z_FEEDRATE, LEVEL_USER},//18
+    {EP_E_FEEDRATE, LEVEL_USER},//19
+    {EP_ADMIN_PWD, LEVEL_ADMIN},//20
+    {EP_USER_PWD, LEVEL_USER},//21
+    {EP_AP_SSID, LEVEL_ADMIN},//22
+    {EP_AP_PASSWORD, LEVEL_ADMIN},//23
+    {EP_AP_IP_VALUE, LEVEL_ADMIN},//24
+    {EP_AP_MASK_VALUE, LEVEL_ADMIN},//25
+    {EP_AP_GATEWAY_VALUE, LEVEL_ADMIN},//26
+    {EP_AP_IP_MODE, LEVEL_ADMIN},//27
+    {EP_AP_PHY_MODE, LEVEL_ADMIN},//28
+    {EP_DATA_STRING, LEVEL_USER},//29
+    {EP_REFRESH_PAGE_TIME2, LEVEL_USER},//30
+    {EP_TARGET_FW, LEVEL_USER},//31
+    {EP_TIMEZONE, LEVEL_USER},//32
+    {EP_TIME_ISDST, LEVEL_USER},//33
+    {EP_TIME_SERVER1, LEVEL_USER},//34
+    {EP_TIME_SERVER2, LEVEL_USER},//35
+    {EP_TIME_SERVER3, LEVEL_USER},//36
+    {EP_IS_DIRECT_SD, LEVEL_USER},//37
+    {EP_PRIMARY_SD, LEVEL_USER},//38
+    {EP_SECONDARY_SD, LEVEL_USER},//39
+    {EP_DIRECT_SD_CHECK, LEVEL_USER} //40
+};
+#define AUTH_ENTRY_NB 41
+//values
+#define DEFAULT_MAX_REFRESH			120
+#define DEFAULT_MIN_REFRESH			0
+#define DEFAULT_MAX_XY_FEEDRATE			9999
+#define DEFAULT_MIN_XY_FEEDRATE			1
+#define DEFAULT_MAX_Z_FEEDRATE			9999
+#define DEFAULT_MIN_Z_FEEDRATE			1
+#define DEFAULT_MAX_E_FEEDRATE			9999
+#define DEFAULT_MIN_E_FEEDRATE			1
+#define DEFAULT_MAX_WEB_PORT			65001
+#define DEFAULT_MIN_WEB_PORT			1
+#define DEFAULT_MAX_DATA_PORT			65001
+#define DEFAULT_MIN_DATA_PORT			1
+
+#define MAX_TRY 2000
 
 //sizes
-#define EEPROM_SIZE				512 //max is 512
+#define EEPROM_SIZE				1024 //max is 1024
 #define MAX_SSID_LENGTH				32
 #define MIN_SSID_LENGTH				1
 #define MAX_PASSWORD_LENGTH 			64
-#define MIN_PASSWORD_LENGTH 			8
+//min size of password is 0 or upper than 8 char
+//so let set min is 0
+#define MIN_PASSWORD_LENGTH 			0
 #define MAX_LOCAL_PASSWORD_LENGTH 			16
 #define MIN_LOCAL_PASSWORD_LENGTH 			1
+#define MAX_DATA_LENGTH				128
+#define MIN_DATA_LENGTH				0
 #define IP_LENGTH 				4
 #define INTEGER_LENGTH 				4
 #define MAX_HOSTNAME_LENGTH		32
+#define MIN_HOSTNAME_LENGTH		1
 #define WL_MAC_ADDR_LENGTH 6
 
 class CONFIG
 {
 public:
+    static bool is_direct_sd;
     static bool read_string(int pos, char byte_buffer[], int size_max);
     static bool read_string(int pos, String & sbuffer, int size_max);
     static bool read_buffer(int pos, byte byte_buffer[], int size_buffer);
@@ -238,7 +388,27 @@ public:
     static bool write_buffer(int pos, const byte * byte_buffer, int size_buffer);
     static bool write_byte(int pos, const byte value);
     static bool reset_config();
-    static void print_config();
+    static void print_config(tpipe output, bool plaintext);
+    static bool SetFirmwareTarget(uint8_t fw);
+    static void InitFirmwareTarget();
+    static void InitDirectSD();
+    static void InitPins();
+    static bool InitBaudrate();
+    static bool InitExternalPorts();
+    static bool check_update_presence();
+    static uint8_t GetFirmwareTarget();
+    static const char* GetFirmwareTargetName();
+    static const char* GetFirmwareTargetShortName();
+#ifdef SDCARD_FEATURE
+    static void list_SD_files(tpipe output);
+    static bool NeedDirectSDBootCheck();
+    static bool hasSD();
+    static bool checkSD();
+    static bool  renameFile (String & newfilename);
+#ifdef SDCARD_CONFIG_FEATURE
+    static bool update_settings();
+#endif
+#endif
     static bool isHostnameValid(const char * hostname);
     static bool isSSIDValid(const char * ssid);
     static bool isPasswordValid(const char * password);
@@ -250,6 +420,11 @@ public:
     static byte split_ip (const char * ptr,byte * part);
     static void esp_restart();
     static void flashfromSD(const char * Filename, int flashtype);
+#if defined(TIMESTAMP_FEATURE)
+    static void init_time_client();
+#endif
+private:
+    static uint8_t FirmwareTarget;
 };
 
 #endif

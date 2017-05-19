@@ -29,6 +29,9 @@
 #endif
 #include <EEPROM.h>
 #include "config.h"
+#ifdef TIMESTAMP_FEATURE
+#include <time.h>
+#endif
 #include "wifi.h"
 #include "bridge.h"
 #include "webinterface.h"
@@ -50,11 +53,27 @@ DNSServer dnsServer;
 #ifdef NETBIOS_FEATURE
 #include <ESP8266NetBIOS.h>
 #endif
+#ifdef SDCARD_FEATURE
+SdFat SD;
+#endif
+#ifdef SDCARD_CONFIG_FEATURE
+#include <IniFile.h>
+#endif
+
+#if defined(TIMESTAMP_FEATURE) && defined(SDCARD_FEATURE)
+void dateTime(uint16_t* date, uint16_t* dtime) {
+time_t n;
+time(&n);
+tm * tmstruct = gmtime((const time_t *)&n);
+ *date = FAT_DATE((tmstruct->tm_year)+1900,( tmstruct->tm_mon)+1, tmstruct->tm_mday);
+ *dtime = FAT_TIME(tmstruct->tm_hour, tmstruct->tm_min, tmstruct->tm_sec);
+}
+#endif
 
 void setup()
 {
     bool breset_config=false;
-    long baud_rate=0;
+    bool directsd_check = false;
     web_interface = NULL;
 #ifdef TCP_IP_DATA_FEATURE
     data_server = NULL;
@@ -63,43 +82,35 @@ void setup()
 #ifdef DEBUG_ESP3D
     Serial.begin(DEFAULT_BAUD_RATE);
     delay(2000);
-    LOG("\nDebug Serial set\n")
+    LOG("\r\nDebug Serial set\r\n")
 #endif
     //WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
+    delay(8000);
+    CONFIG::InitDirectSD();
+    CONFIG::InitPins();
 #ifdef RECOVERY_FEATURE
     delay(8000);
     //check if reset config is requested
-    pinMode(RESET_CONFIG_PIN, INPUT);
     if (digitalRead(RESET_CONFIG_PIN)==0) {
         breset_config=true;    //if requested =>reset settings
     }
 #endif
     //check if EEPROM has value
-    if ( CONFIG::read_buffer(EP_BAUD_RATE,  (byte *)&baud_rate , INTEGER_LENGTH)&&CONFIG::read_buffer(EP_WEB_PORT,  (byte *)&(wifi_config.iweb_port) , INTEGER_LENGTH)&&CONFIG::read_buffer(EP_DATA_PORT,  (byte *)&(wifi_config.idata_port) , INTEGER_LENGTH)) {
-        //check if baud value is one of allowed ones
-        if ( ! (baud_rate==9600 || baud_rate==19200 ||baud_rate==38400 ||baud_rate==57600 ||baud_rate==115200 ||baud_rate==230400 ||baud_rate==250000) ) {
-            LOG("Error for EEPROM baud rate\n")
-            breset_config=true;    //baud rate is incorrect =>reset settings
-        }
-        if (wifi_config.iweb_port<1 ||wifi_config.iweb_port>65001 || wifi_config.idata_port <1 || wifi_config.idata_port >65001) {
-            breset_config=true;    //out of range =>reset settings
-            LOG("Error for EEPROM port values\n")
-        }
-
-    } else {
+    if (  !CONFIG::InitBaudrate() || !CONFIG::InitExternalPorts()) {
         breset_config=true;    //cannot access to config settings=> reset settings
-        LOG("Error no EEPROM access\n")
+        LOG("Error no EEPROM access\r\n")
     }
 
     //reset is requested
     if(breset_config) {
         //update EEPROM with default settings
         Serial.begin(DEFAULT_BAUD_RATE);
+        Serial.setRxBufferSize(SERIAL_RX_BUFFER_SIZE);
         delay(2000);
         Serial.println(F("M117 ESP EEPROM reset"));
 #ifdef DEBUG_ESP3D
-        CONFIG::print_config();
+        CONFIG::print_config(DEBUG_PIPE, true);
         delay(1000);
 #endif
         CONFIG::reset_config();
@@ -110,23 +121,20 @@ void setup()
         CONFIG::esp_restart();
     }
 #if defined(DEBUG_ESP3D) && defined(DEBUG_OUTPUT_SERIAL)
-    LOG("\n");
+    LOG("\r\n");
     delay(500);
     Serial.flush();
 #endif
-    //setup serial
-    Serial.begin(baud_rate);
-    delay(1000);
-    LOG("Serial Set\n");
-    wifi_config.baud_rate=baud_rate;
+    //get target FW
+    CONFIG::InitFirmwareTarget();
     //Update is done if any so should be Ok
     SPIFFS.begin();
-
+       
     //setup wifi according settings
     if (!wifi_config.Setup()) {
         Serial.println(F("M117 Safe mode 1"));
         //try again in AP mode
-        if (!wifi_config.Setup(true)) {
+       if (!wifi_config.Setup(true)) {
             Serial.println(F("M117 Safe mode 2"));
             wifi_config.Safe_Setup();
         }
@@ -143,6 +151,7 @@ void setup()
     if (WiFi.getMode()!=WIFI_STA ) {
         // if DNSServer is started with "*" for domain name, it will reply with
         // provided IP to all DNS request
+        dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
         dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
     }
 #endif
@@ -156,11 +165,12 @@ void setup()
 
 #ifdef MDNS_FEATURE
     // Check for any mDNS queries and send responses
-    wifi_config.mdns.addService("http", "tcp", wifi_config.iweb_port);
+    //useless in AP mode and service consuming 
+    if (WiFi.getMode()!=WIFI_AP )wifi_config.mdns.addService("http", "tcp", wifi_config.iweb_port);
 #endif
 #if defined(SSDP_FEATURE) || defined(NETBIOS_FEATURE)
     String shost;
-    if (!CONFIG::read_string(EP_HOSTNAME, shost , MAX_HOSTNAME_LENGTH)) {
+    if (!CONFIG::read_string(EP_HOSTNAME, shost, MAX_HOSTNAME_LENGTH)) {
         shost=wifi_config.get_default_hostname();
     }
 #endif
@@ -178,13 +188,25 @@ void setup()
     SSDP.setManufacturer("Espressif Systems");
     SSDP.setManufacturerURL("http://espressif.com");
     SSDP.setDeviceType("upnp:rootdevice");
-    SSDP.begin();
+    if (WiFi.getMode()!=WIFI_AP )SSDP.begin();
 #endif
 #ifdef NETBIOS_FEATURE
-    NBNS.begin(shost.c_str());
+    //useless in AP mode and service consuming 
+    if (WiFi.getMode()!=WIFI_AP )NBNS.begin(shost.c_str());
 #endif
-    LOG("Setup Done\n");
+
+#if defined(TIMESTAMP_FEATURE)
+    CONFIG::init_time_client();
+#ifdef SDCARD_FEATURE
+if(CONFIG::is_direct_sd) {
+    //set callback to get time on files on SD
+    SdFile::dateTimeCallback(dateTime);
+    }
+#endif
+#endif
+    LOG("Setup Done\r\n");
 }
+
 
 
 //main loop
