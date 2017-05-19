@@ -24,7 +24,7 @@ Arduino ide 1.8.0 with git from ESP8266 : [![build status](http://tech-hunters.m
 Every support is welcome: [<img src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG_global.gif" border="0" alt="PayPal – The safer, easier way to pay online.">](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=Y8FFE7NA4LJWQ)    
 Especially if need to buy new modules for testing.
 
-##Features
+## Features
 * Serial/Wifi bridge using configurable port 8888, here to enable/disable [TCP_IP_DATA_FEATURE](https://github.com/luc-github/ESP3D/blob/master/esp3d/config.h)
 * Use GPIO2 to ground to reset all settings in hard way - 2-6 sec after boot / not before!! Set GPIO2 to ground before boot change boot mode and go to special boot that do not reach FW. Currently boot take 10 sec - giving 8 seconds to connect GPIO2 to GND and do an hard recovery for settings, here to enable/disable [RECOVERY_FEATURE](https://github.com/luc-github/ESP8266/blob/master/esp8266/config.h)   
 * Wifi configuration by web browser (Station or Access point)
@@ -38,7 +38,7 @@ Especially if need to buy new modules for testing.
 * Printer monitoring / control (temperatures/speed/jog/list SDCard content/launch,pause or stop a print/etc...), here to enable/disable [MONITORING_FEATURE/INFO_MSG_FEATURE/ERROR_MSG_FEATURE/STATUS_MSG_FEATURE](https://github.com/luc-github/ESP3D/blob/master/esp3d/config.h)
 * Fail safe mode (Access point)is enabled if cannot connect to defined station at boot.
 
-##Web configuration      
+## Web configuration      
 *Wifi Mode : Access point / Client station  
 *IP Generation: DHCP/Static IP      
 *IP/MASK/GATEWAY for static data    
@@ -46,7 +46,7 @@ Especially if need to buy new modules for testing.
 *web port and data port      
 
     
-##Default Configuration      
+## Default Configuration      
 Default Settings:    
 AP:ESP8266    
 PW:12345678   
@@ -70,7 +70,7 @@ Password(if authentication is enabled): user
 
 Additionally 404.html (the page not found) is not mandatory, a fail safe version is embeded if it isnot present.     
 
-##Installation
+## Installation
 Please use [Arduino IDE 1.8.0](http://arduino.cc/en/Main/Software) and [git version of esp8266 module](http://esp8266.github.io/Arduino/versions/2.2.0/doc/installing.html#using-git-version)
 
 UI is present in data directory and must be flashed on SPIFFS also but latest version can found at https://github.com/luc-github/ESP3D-WEBUI
@@ -114,7 +114,7 @@ Once flashed you also can use the web updater to flash new FW in System Configur
 
 
 
-##TODO   
+## TODO   
 -- Close open topics    
 -- Do testing (a lot)    
 -- UI Improvement   
