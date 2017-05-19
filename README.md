@@ -8,7 +8,7 @@ Please use ESP with at least 1M flash
 
 <u>Stable version:</u>    
 <u>Development version:</u>    
-Arduino ide 1.8.0 with git from ESP8266 : [![build status](http://tech-hunters.myds.me:2002/luc/ESP3D/badges/devt/build.svg)](http://tech-hunters.myds.me:2002/luc/ESP3D/commits/master)
+Arduino ide 1.8.0 with git from ESP8266 : [![build status](https://travis-ci.org/luc-github/ESP3D.svg?branch=master)](https://travis-ci.org/luc-github/ESP3D)
 
 [All releases](https://github.com/luc-github/ESP3D/wiki)
 
