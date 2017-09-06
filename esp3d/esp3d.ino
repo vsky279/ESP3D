@@ -29,9 +29,6 @@
 #endif
 #include <EEPROM.h>
 #include "config.h"
-#ifdef TIMESTAMP_FEATURE
-#include <time.h>
-#endif
 #include "wifi.h"
 #include "bridge.h"
 #include "webinterface.h"
@@ -44,8 +41,7 @@
 #endif
 #ifdef CAPTIVE_PORTAL_FEATURE
 #include <DNSServer.h>
-const byte DNS_PORT = 53;
-DNSServer dnsServer;
+extern DNSServer dnsServer;
 #endif
 #ifdef SSDP_FEATURE
 #include <ESP8266SSDP.h>
@@ -53,22 +49,10 @@ DNSServer dnsServer;
 #ifdef NETBIOS_FEATURE
 #include <ESP8266NetBIOS.h>
 #endif
-#ifdef SDCARD_FEATURE
-SdFat SD;
+#ifndef FS_NO_GLOBALS
+#define FS_NO_GLOBALS
 #endif
-#ifdef SDCARD_CONFIG_FEATURE
-#include <IniFile.h>
-#endif
-
-#if defined(TIMESTAMP_FEATURE) && defined(SDCARD_FEATURE)
-void dateTime(uint16_t* date, uint16_t* dtime) {
-time_t n;
-time(&n);
-tm * tmstruct = gmtime((const time_t *)&n);
- *date = FAT_DATE((tmstruct->tm_year)+1900,( tmstruct->tm_mon)+1, tmstruct->tm_mday);
- *dtime = FAT_TIME(tmstruct->tm_hour, tmstruct->tm_min, tmstruct->tm_sec);
-}
-#endif
+#include <FS.h>
 
 void setup()
 {
@@ -140,70 +124,10 @@ void setup()
         }
     }
     delay(1000);
-    //start web interface
-    web_interface = new WEBINTERFACE_CLASS(wifi_config.iweb_port);
-    //here the list of headers to be recorded
-    const char * headerkeys[] = {"Cookie"} ;
-    size_t headerkeyssize = sizeof(headerkeys)/sizeof(char*);
-    //ask server to track these headers
-    web_interface->WebServer.collectHeaders(headerkeys, headerkeyssize );
-#ifdef CAPTIVE_PORTAL_FEATURE
-    if (WiFi.getMode()!=WIFI_STA ) {
-        // if DNSServer is started with "*" for domain name, it will reply with
-        // provided IP to all DNS request
-        dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-        dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+    //setup servers
+    if (!wifi_config.Enable_servers()) {
+        Serial.println(F("M117 Error enabling servers"));
     }
-#endif
-    web_interface->WebServer.begin();
-#ifdef TCP_IP_DATA_FEATURE
-    //start TCP/IP interface
-    data_server = new WiFiServer (wifi_config.idata_port);
-    data_server->begin();
-    data_server->setNoDelay(true);
-#endif
-
-#ifdef MDNS_FEATURE
-    // Check for any mDNS queries and send responses
-    //useless in AP mode and service consuming 
-    if (WiFi.getMode()!=WIFI_AP )wifi_config.mdns.addService("http", "tcp", wifi_config.iweb_port);
-#endif
-#if defined(SSDP_FEATURE) || defined(NETBIOS_FEATURE)
-    String shost;
-    if (!CONFIG::read_string(EP_HOSTNAME, shost, MAX_HOSTNAME_LENGTH)) {
-        shost=wifi_config.get_default_hostname();
-    }
-#endif
-#ifdef SSDP_FEATURE
-    String stmp;
-    SSDP.setSchemaURL("description.xml");
-    SSDP.setHTTPPort( wifi_config.iweb_port);
-    SSDP.setName(shost.c_str());
-    stmp=String(ESP.getChipId());
-    SSDP.setSerialNumber(stmp.c_str());
-    SSDP.setURL("/");
-    SSDP.setModelName("ESP8266 01");
-    SSDP.setModelNumber("01");
-    SSDP.setModelURL("http://espressif.com/en/products/esp8266/");
-    SSDP.setManufacturer("Espressif Systems");
-    SSDP.setManufacturerURL("http://espressif.com");
-    SSDP.setDeviceType("upnp:rootdevice");
-    if (WiFi.getMode()!=WIFI_AP )SSDP.begin();
-#endif
-#ifdef NETBIOS_FEATURE
-    //useless in AP mode and service consuming 
-    if (WiFi.getMode()!=WIFI_AP )NBNS.begin(shost.c_str());
-#endif
-
-#if defined(TIMESTAMP_FEATURE)
-    CONFIG::init_time_client();
-#ifdef SDCARD_FEATURE
-if(CONFIG::is_direct_sd) {
-    //set callback to get time on files on SD
-    SdFile::dateTimeCallback(dateTime);
-    }
-#endif
-#endif
     LOG("Setup Done\r\n");
 }
 
@@ -212,17 +136,21 @@ if(CONFIG::is_direct_sd) {
 //main loop
 void loop()
 {
+    //be sure wifi is on to proceed wifi function
+     if (WiFi.getMode()!=WIFI_OFF ) {
 #ifdef CAPTIVE_PORTAL_FEATURE
-    if (WiFi.getMode()!=WIFI_STA ) {
-        dnsServer.processNextRequest();
-    }
+        if (WiFi.getMode()!=WIFI_STA ) {
+            dnsServer.processNextRequest();
+        }
 #endif
 //web requests
-    web_interface->WebServer.handleClient();
+        web_interface->WebServer.handleClient();
 #ifdef TCP_IP_DATA_FEATURE
-    BRIDGE::processFromTCP2Serial();
+        BRIDGE::processFromTCP2Serial();
 #endif
-    BRIDGE::processFromSerial2TCP();
+    }
+        BRIDGE::processFromSerial2TCP();
+    //in case of restart requested
     if (web_interface->restartmodule) {
         CONFIG::esp_restart();
     }

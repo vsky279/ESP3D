@@ -24,10 +24,8 @@
 #include <WiFiClient.h>
 #include <WiFiServer.h>
 #include <ESP8266WebServer.h>
-#ifdef SDCARD_FEATURE
 #ifndef FS_NO_GLOBALS
 #define FS_NO_GLOBALS
-#endif
 #endif
 #include <FS.h>
 #include "storestrings.h"
@@ -37,6 +35,7 @@
 struct auth_ip {
     IPAddress ip;
     level_authenticate_type level;
+    char userID[17];
     char sessionID[17];
     uint32_t last_time;
     auth_ip * _next;
@@ -48,10 +47,7 @@ public:
     WEBINTERFACE_CLASS (int port = 80);
     ~WEBINTERFACE_CLASS();
     ESP8266WebServer WebServer;
-    FSFILE fsUploadFile;
-#ifdef SDCARD_FEATURE
-    File sdUploadFile;
-#endif
+     fs::File fsUploadFile;
 #ifdef ERROR_MSG_FEATURE
     STORESTRINGS_CLASS error_msg;
 #endif
@@ -68,6 +64,8 @@ public:
     bool blockserial;
 #ifdef AUTHENTICATION_FEATURE
     level_authenticate_type ResetAuthIP(IPAddress ip,const char * sessionID);
+    auth_ip * GetAuth(IPAddress ip,const char * sessionID);
+    bool ClearAuthIP(IPAddress ip, const char * sessionID);
     char * create_session_ID();
 #endif
     uint8_t _upload_status;

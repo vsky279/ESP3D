@@ -158,11 +158,13 @@ bool BRIDGE::processFromSerial2TCP()
         uint8_t sbuf[len];
         Serial.readBytes(sbuf, len);
 #ifdef TCP_IP_DATA_FEATURE
-        //push UART data to all connected tcp clients
-        for(i = 0; i < MAX_SRV_CLIENTS; i++) {
-            if (serverClients[i] && serverClients[i].connected()) {
-                serverClients[i].write(sbuf, len);
-                delay(0);
+          if (WiFi.getMode()!=WIFI_OFF ) {
+            //push UART data to all connected tcp clients
+            for(i = 0; i < MAX_SRV_CLIENTS; i++) {
+                if (serverClients[i] && serverClients[i].connected()) {
+                    serverClients[i].write(sbuf, len);
+                    delay(0);
+                }
             }
         }
 #endif

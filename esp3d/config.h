@@ -80,25 +80,9 @@
 //Serial rx buffer size is 256 but can be extended
 #define SERIAL_RX_BUFFER_SIZE 512
 
-//SDCARD_FEATURE: to access SD Card files directly instead of access by serial using printer Board FW
-//#define SDCARD_FEATURE
-
-//TIMESTAMP_FEATURE: Time stamp feature on direct SD  files
-//#define TIMESTAMP_FEATURE
-
-//WEBHOST_SDCARD_FEATURE : to use SDCard to host webpages
-//NOT YET IMPLEMENTED!!!
-//#define WEBHOST_SDCARD_FEATURE
-
-//Each time we want to access SD for reading or writing the flag need to be low
-//when action is done flag must be high to give back to main board
-#if defined(SDCARD_FLAG_PIN) && SDCARD_FLAG_PIN != -1
-#define ACCESSSD() {digitalWrite(SDCARD_FLAG_PIN, LOW);LOG("SD Flag to low\r\n")}
-#define RELEASESD() {digitalWrite(SDCARD_FLAG_PIN, HIGH);LOG("SD Flag to high\r\n") delay(50);}
-#else
 #define ACCESSSD() {}
 #define RELEASESD() {}
-#endif
+
 
 //DEBUG Flag do not do this when connected to printer !!!
 //be noted all upload may failed if enabled
@@ -116,22 +100,22 @@
 #define FS_NO_GLOBALS
 #endif
 #include <FS.h>
-#define DEBUG_ESP3D(string) {FSFILE logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
+#define DEBUG_ESP3D(string) { fs::File logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
 */
 
 #ifdef DEBUG_ESP3D
 #ifdef DEBUG_OUTPUT_SPIFFS
-#ifdef SDCARD_FEATURE
 #ifndef FS_NO_GLOBALS
 #define FS_NO_GLOBALS
 #endif
-#endif
 #include <FS.h>
 #define DEBUG_PIPE NO_PIPE
-#define LOG(string) {FSFILE logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
+#define LOG(string) { fs::File logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
 #endif
 #ifdef DEBUG_OUTPUT_SD
 #define DEBUG_PIPE NO_PIPE
+#include "SdFat.h"
+extern SdFat SD;
 #define LOG(string) {if(CONFIG::hasSD()){ACCESSSD() File logfile = SD.open("/log.txt", "a+");logfile.print(string);logfile.close();RELEASESD()}}
 #endif
 #ifdef DEBUG_OUTPUT_SERIAL
@@ -148,16 +132,6 @@
 #define DEBUG_PIPE NO_PIPE
 #endif
 
-#ifdef SDCARD_FEATURE
-#define FSFILE fs::File
-#define FSDIR fs::Dir
-#define FSINFO fs::FSInfo
-#else
-#define FSFILE File
-#define FSDIR fs::Dir
-#define FSINFO FSInfo
-#endif
-
 #ifndef CONFIG_h
 #define CONFIG_h
 
@@ -165,13 +139,9 @@
 extern "C" {
 #include "user_interface.h"
 }
-#ifdef SDCARD_FEATURE
-#include "SdFat.h"
-extern SdFat SD;
-#endif
 #include "wifi.h"
 //version and sources location
-#define FW_VERSION "0.9.601"
+#define FW_VERSION "0.9.850"
 #define REPOSITORY "https://github.com/luc-github/ESP3D"
 
 typedef enum {
@@ -289,11 +259,7 @@ const char DEFAULT_TIME_SERVER3 []  PROGMEM =	"1.pool.ntp.org";
 #define DEFAULT_SECONDARY_SD 2
 #define DEFAULT_DIRECT_SD_CHECK 0
 
-#ifdef SDCARD_FEATURE
-#define DEFAULT_IS_DIRECT_SD 1
-#else
 #define DEFAULT_IS_DIRECT_SD 0
-#endif
 
 
 
@@ -399,16 +365,6 @@ public:
     static uint8_t GetFirmwareTarget();
     static const char* GetFirmwareTargetName();
     static const char* GetFirmwareTargetShortName();
-#ifdef SDCARD_FEATURE
-    static void list_SD_files(tpipe output);
-    static bool NeedDirectSDBootCheck();
-    static bool hasSD();
-    static bool checkSD();
-    static bool  renameFile (String & newfilename);
-#ifdef SDCARD_CONFIG_FEATURE
-    static bool update_settings();
-#endif
-#endif
     static bool isHostnameValid(const char * hostname);
     static bool isSSIDValid(const char * ssid);
     static bool isPasswordValid(const char * password);
@@ -420,9 +376,6 @@ public:
     static byte split_ip (const char * ptr,byte * part);
     static void esp_restart();
     static void flashfromSD(const char * Filename, int flashtype);
-#if defined(TIMESTAMP_FEATURE)
-    static void init_time_client();
-#endif
 private:
     static uint8_t FirmwareTarget;
 };

@@ -20,6 +20,8 @@
 
 #include "wifi.h"
 #include "config.h"
+#include "bridge.h"
+#include "webinterface.h"
 #include "ESP8266WiFi.h"
 #include "IPAddress.h"
 #ifdef MDNS_FEATURE
@@ -27,11 +29,20 @@
 #endif
 #ifdef CAPTIVE_PORTAL_FEATURE
 #include <DNSServer.h>
-extern DNSServer dnsServer;
+DNSServer dnsServer;
+const byte DNS_PORT = 53;
+#endif
+#include <ESP8266WebServer.h>
+#ifdef SSDP_FEATURE
+#include <ESP8266SSDP.h>
+#endif
+#ifdef NETBIOS_FEATURE
+#include <ESP8266NetBIOS.h>
 #endif
 extern "C" {
 #include "user_interface.h"
 }
+
 WIFI_CONFIG::WIFI_CONFIG()
 {
     iweb_port=DEFAULT_WEB_PORT;
@@ -336,4 +347,83 @@ bool WIFI_CONFIG::Setup(bool force_ap)
     Serial.flush();
     return true;
 }
+
+bool WIFI_CONFIG::Enable_servers()
+{
+      //start web interface
+    web_interface = new WEBINTERFACE_CLASS(wifi_config.iweb_port);
+    //here the list of headers to be recorded
+    const char * headerkeys[] = {"Cookie"} ;
+    size_t headerkeyssize = sizeof(headerkeys)/sizeof(char*);
+    //ask server to track these headers
+    web_interface->WebServer.collectHeaders(headerkeys, headerkeyssize );
+#ifdef CAPTIVE_PORTAL_FEATURE
+    if (WiFi.getMode()!=WIFI_STA ) {
+        // if DNSServer is started with "*" for domain name, it will reply with
+        // provided IP to all DNS request
+        dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+        dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+    }
+#endif
+    web_interface->WebServer.begin();
+#ifdef TCP_IP_DATA_FEATURE
+    //start TCP/IP interface
+    data_server = new WiFiServer (wifi_config.idata_port);
+    data_server->begin();
+    data_server->setNoDelay(true);
+#endif
+
+#ifdef MDNS_FEATURE
+    // Check for any mDNS queries and send responses
+    //useless in AP mode and service consuming 
+    if (WiFi.getMode()!=WIFI_AP )wifi_config.mdns.addService("http", "tcp", wifi_config.iweb_port);
+#endif
+#if defined(SSDP_FEATURE) || defined(NETBIOS_FEATURE)
+    String shost;
+    if (!CONFIG::read_string(EP_HOSTNAME, shost, MAX_HOSTNAME_LENGTH)) {
+        shost=wifi_config.get_default_hostname();
+    }
+#endif
+#ifdef SSDP_FEATURE
+    String stmp;
+    SSDP.setSchemaURL("description.xml");
+    SSDP.setHTTPPort( wifi_config.iweb_port);
+    SSDP.setName(shost.c_str());
+    stmp=String(ESP.getChipId());
+    SSDP.setSerialNumber(stmp.c_str());
+    SSDP.setURL("/");
+    SSDP.setModelName("ESP8266 01");
+    SSDP.setModelNumber("01");
+    SSDP.setModelURL("http://espressif.com/en/products/esp8266/");
+    SSDP.setManufacturer("Espressif Systems");
+    SSDP.setManufacturerURL("http://espressif.com");
+    SSDP.setDeviceType("upnp:rootdevice");
+    if (WiFi.getMode()!=WIFI_AP )SSDP.begin();
+#endif
+#ifdef NETBIOS_FEATURE
+    //useless in AP mode and service consuming 
+    if (WiFi.getMode()!=WIFI_AP )NBNS.begin(shost.c_str());
+#endif
+
+    return true;
+}
+
+bool WIFI_CONFIG::Disable_servers()
+{
+#ifdef TCP_IP_DATA_FEATURE
+    data_server->stop();
+#endif
+#ifdef CAPTIVE_PORTAL_FEATURE
+    if (WiFi.getMode()!=WIFI_STA ) {
+        dnsServer.stop();
+    }
+#endif
+#ifdef NETBIOS_FEATURE
+    //useless in AP mode and service consuming 
+    if (WiFi.getMode()!=WIFI_AP )NBNS.end();
+#endif
+    web_interface->WebServer.stop();
+    return true;
+}
+
 WIFI_CONFIG wifi_config;

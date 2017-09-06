@@ -22,10 +22,8 @@
 #include "config.h"
 #include "wifi.h"
 #include "webinterface.h"
-#ifdef SDCARD_FEATURE
 #ifndef FS_NO_GLOBALS
 #define FS_NO_GLOBALS
-#endif
 #endif
 #include <FS.h>
 
@@ -315,6 +313,47 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
                 }
         }
         break;
+     // Set wifi on/off
+    //[ESP110]<state>[pwd=<admin password>]
+    case 110:
+        parameter = get_param(cmd_params,"", true);
+        if (parameter == "on") {
+            mode = 1;
+        } else if (parameter == "off") {
+            mode = 0;
+        } else if (parameter == "restart") {
+            mode = 2;
+        } else {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
+        }
+        if (response) {
+            #ifdef AUTHENTICATION_FEATURE
+            if (auth_type != LEVEL_ADMIN) {
+                BRIDGE::println(INCORRECT_CMD_MSG, output);
+                response = false;
+            } else
+            #endif
+            if (mode == 0) {
+                 if (WiFi.getMode() !=WIFI_OFF) {
+                     //disable wifi
+                     Serial.println("M117 Disabling Wifi");
+                     WiFi.mode(WIFI_OFF);
+                     wifi_config.Disable_servers();
+                     return response;
+                 } else BRIDGE::println("M117 Wifi already off", output);
+            }
+            else if (mode == 1) { //restart device is the best way to start everything clean
+                 if (WiFi.getMode() == WIFI_OFF) {
+                      Serial.println("M117 Enabling Wifi");
+                      CONFIG::esp_restart();
+                 } else BRIDGE::println("M117 Wifi already on", output);
+            } else  { //restart wifi and restart is the best way to start everything clean
+                 Serial.println("M117 Enabling Wifi");
+                 CONFIG::esp_restart();
+            }
+        }
+        break;
     //Get current IP
     //[ESP111]<header answer>
     case 111: {
@@ -345,28 +384,6 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
         LOG("\r\n")
     }
     break;
-    //restart time client
-#ifdef  TIMESTAMP_FEATURE
-    case 114: {
-        CONFIG::init_time_client();
-        LOG("restart time client\r\n")
-    }
-    break;
-#endif
-#ifdef SDCARD_FEATURE
-    //Get SD Card Status
-    //[ESP200]<header answer>
-    case 200: 
-    if (CONFIG::is_direct_sd) {
-        BRIDGE::print(cmd_params, output);
-        if (CONFIG::hasSD()) {
-            BRIDGE::println("SD card detected", output);
-        } else {
-            BRIDGE::println("No SD card", output);
-        }
-    } else  BRIDGE::println("No SD card", output);
-    break;
-#endif
 #ifdef DIRECT_PIN_FEATURE
     //Get/Set pin value
     //[ESP201]P<pin> V<value>
@@ -443,33 +460,6 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
             }
         }
         break;
-#endif
-
-#ifdef SDCARD_FEATURE
-    //Get SD Card content
-    //[ESP202]<header answer>
-    case 202: 
-    if (CONFIG::is_direct_sd) {
-        if (CONFIG::hasSD()) {
-#if defined(SDCARD_FLAG_PIN) && SDCARD_FLAG_PIN != -1
-//save flag state
-            bool is_low = !digitalRead(SDCARD_FLAG_PIN);
-            if(!is_low)ACCESSSD()
-#endif
-                CONFIG::list_SD_files(output);
-#if defined(SDCARD_FLAG_PIN) && SDCARD_FLAG_PIN != -1
-//restore flag state
-            if(!is_low)RELEASESD()
-#endif
-            } else {
-            BRIDGE::println(cmd_params, output);
-            BRIDGE::println("No Card", output);
-        }
-    } else {
-        BRIDGE::println(INCORRECT_CMD_MSG, output);
-        response = false;
-    }
-    break;
 #endif
     //Save data string
     //[ESP300]<data>pwd=<user/admin password>
@@ -892,91 +882,6 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
             }
             BRIDGE::print(F("\",\"H\":\"AP Static Gateway\"}"), output);
             delay(0);
-#ifdef TIMESTAMP_FEATURE
-            BRIDGE::println(F(","), output);
-            
-             //26-Time zone
-            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIMEZONE), output);
-            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
-            if (!CONFIG::read_byte(EP_TIMEZONE, &bbuf )) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print((const char *)CONFIG::intTostr((int8_t)bbuf), output);
-            }
-            BRIDGE::print(F("\",\"H\":\"Time Zone\",\"O\":["), output);
-            for (int i=-12; i <= 12 ; i++) {
-                BRIDGE::print(F("{\""), output);
-                BRIDGE::print((const char *)CONFIG::intTostr(i), output);
-                BRIDGE::print(F("\":\""), output);
-                BRIDGE::print((const char *)CONFIG::intTostr(i), output);
-                BRIDGE::print(F("\"}"), output);
-                if (i<12) {
-                    BRIDGE::print(F(","), output);
-                }
-            }
-            BRIDGE::print(F("]}"), output);
-            BRIDGE::println(F(","), output);
-            
-             //27- DST 
-            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_ISDST), output);
-            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
-            if (!CONFIG::read_byte(EP_TIME_ISDST, &bbuf )) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
-            }
-            BRIDGE::print(F("\",\"H\":\"Day Saving Time\",\"O\":[{\"No\":\"0\"},{\"Yes\":\"1\"}]}"), output);
-            BRIDGE::println(F(","), output);
-            
-            //28- Time Server1
-            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_SERVER1), output);
-            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
-            if (!CONFIG::read_string(EP_TIME_SERVER1, sbuf, MAX_DATA_LENGTH)) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print(sbuf, output);
-            }
-            BRIDGE::print(F("\",\"S\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(MAX_DATA_LENGTH), output);
-            BRIDGE::print(F("\",\"H\":\"Time Server 1\",\"M\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(MIN_DATA_LENGTH), output);
-            BRIDGE::print(F("\"}"), output);
-            BRIDGE::println(F(","), output);
-            
-            //29- Time Server2
-            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_SERVER2), output);
-            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
-            if (!CONFIG::read_string(EP_TIME_SERVER2, sbuf, MAX_DATA_LENGTH)) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print(sbuf, output);
-            }
-            BRIDGE::print(F("\",\"S\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(MAX_DATA_LENGTH), output);
-            BRIDGE::print(F("\",\"H\":\"Time Server 2\",\"M\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(MIN_DATA_LENGTH), output);
-            BRIDGE::print(F("\"}"), output);
-            BRIDGE::println(F(","), output);
-            
-            //30- Time Server3
-            BRIDGE::print(F("{\"F\":\"network\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_TIME_SERVER3), output);
-            BRIDGE::print(F("\",\"T\":\"S\",\"V\":\""), output);
-            if (!CONFIG::read_string(EP_TIME_SERVER3, sbuf, MAX_DATA_LENGTH)) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print(sbuf, output);
-            }
-            BRIDGE::print(F("\",\"S\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(MAX_DATA_LENGTH), output);
-            BRIDGE::print(F("\",\"H\":\"Time Server 3\",\"M\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(MIN_DATA_LENGTH), output);
-            BRIDGE::print(F("\"}"), output);
-#endif
         }
         
         if (cmd_params == "printer" || cmd_params == "") {
@@ -1005,55 +910,6 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
             BRIDGE::print(F("\"},{\"Unknown\":\""), output);
             BRIDGE::print((const char *)CONFIG::intTostr(UNKNOWN_FW), output);
             BRIDGE::print(F("\"}]}"), output);
-            BRIDGE::println(F(","), output);
-            
-#if defined(SDCARD_FEATURE)
-            //Direct SD 
-            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_IS_DIRECT_SD), output);
-            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
-            if (!CONFIG::read_byte(EP_IS_DIRECT_SD, &bbuf )) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
-            }
-            BRIDGE::print(F("\",\"H\":\"Direct SD access\",\"O\":[{\"No\":\"0\"},{\"Yes\":\"1\"}]}"), output);
-            BRIDGE::println(F(","), output);
-            
-            //Direct SD Check
-            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_DIRECT_SD_CHECK), output);
-            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
-            if (!CONFIG::read_byte(EP_DIRECT_SD_CHECK, &bbuf )) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
-            }
-            BRIDGE::print(F("\",\"H\":\"Direct SD Boot Check\",\"O\":[{\"No\":\"0\"},{\"Yes\":\"1\"}]}"), output);
-            BRIDGE::println(F(","), output);
-#endif
-            //Primary SD 
-            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_PRIMARY_SD), output);
-            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
-            if (!CONFIG::read_byte(EP_PRIMARY_SD, &bbuf )) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
-            }
-            BRIDGE::print(F("\",\"H\":\"Primary SD\",\"O\":[{\"None\":\"0\"},{\"/sd/\":\"1\"},{\"/ext/\":\"2\"}]}"), output);
-            BRIDGE::println(F(","), output);
-            
-            //Secondary SD 
-            BRIDGE::print(F("{\"F\":\"printer\",\"P\":\""), output);
-            BRIDGE::print((const char *)CONFIG::intTostr(EP_SECONDARY_SD), output);
-            BRIDGE::print(F("\",\"T\":\"B\",\"V\":\""), output);
-            if (!CONFIG::read_byte(EP_SECONDARY_SD, &bbuf )) {
-                BRIDGE::print("???", output);
-            } else {
-                BRIDGE::print((const char *)CONFIG::intTostr(bbuf), output);
-            }
-            BRIDGE::print(F("\",\"H\":\"Secondary SD\",\"O\":[{\"None\":\"0\"},{\"/sd/\":\"1\"},{\"/ext/\":\"2\"}]}"), output);
             BRIDGE::println(F(","), output);
             
             //Refresh time 1
@@ -1205,9 +1061,6 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
                         CONFIG::InitDirectSD();
                         if (CONFIG::is_direct_sd) CONFIG::InitPins();
                     }
-#if defined(TIMESTAMP_FEATURE)
-                    if ((pos == EP_TIMEZONE) || (pos == EP_TIME_ISDST) || (pos == EP_TIME_SERVER1) || (pos == EP_TIME_SERVER2) || (pos == EP_TIME_SERVER3))CONFIG::init_time_client();
-#endif
                     }
                 }
             if (styp == "I") {
@@ -1350,7 +1203,7 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
         if ((cmd_params.length() > 0) && (cmd_params[0] != '/')) {
             cmd_params = "/" + cmd_params;
         }
-        FSFILE currentfile = SPIFFS.open(cmd_params, "r");
+         fs::File currentfile = SPIFFS.open(cmd_params, "r");
         if (currentfile) {//if file open success
             //flush to be sure send buffer is empty
             Serial.flush();
@@ -1419,6 +1272,12 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
         if (sd_dir == SD_DIRECTORY) BRIDGE::print(F("/sd/"), output);
         else if (sd_dir == EXT_DIRECTORY) BRIDGE::print(F("/ext/"), output);
         else BRIDGE::print(F("none"), output);
+        BRIDGE::print(F(" # authentication:"), output);
+#ifdef AUTHENTICATION_FEATURE
+         BRIDGE::print(F("yes"), output);
+#else
+         BRIDGE::print(F("no"), output);
+#endif
         BRIDGE::println("", output);
     }
         break;

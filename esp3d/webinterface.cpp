@@ -31,18 +31,21 @@
 #include "storestrings.h"
 #include "command.h"
 #include "bridge.h"
+#ifndef FS_NO_GLOBALS
+#define FS_NO_GLOBALS
+#endif
+#include <FS.h>
 
 #ifdef SSDP_FEATURE
 #include <ESP8266SSDP.h>
 #endif
 
+//embedded response file if no files on SPIFFS
+#include "nofile.h"
+
 #define MAX_AUTH_IP 10
 #define HIDDEN_PASSWORD "********"
 
-
-#if defined(SDCARD_FEATURE) && defined(SDCARD_CARD_SIZE)
-bool redosizecheck = true;
-#endif
 
 typedef enum {
     UPLOAD_STATUS_NONE = 0,
@@ -54,7 +57,7 @@ typedef enum {
 
 const char PAGE_404 [] PROGMEM ="<HTML>\n<HEAD>\n<title>Redirecting...</title> \n</HEAD>\n<BODY>\n<CENTER>Unknown page : $QUERY$- you will be redirected...\n<BR><BR>\nif not redirected, <a href='http://$WEB_ADDRESS$'>click here</a>\n<BR><BR>\n<PROGRESS name='prg' id='prg'></PROGRESS>\n\n<script>\nvar i = 0; \nvar x = document.getElementById(\"prg\"); \nx.max=5; \nvar interval=setInterval(function(){\ni=i+1; \nvar x = document.getElementById(\"prg\"); \nx.value=i; \nif (i>5) \n{\nclearInterval(interval);\nwindow.location.href='/';\n}\n},1000);\n</script>\n</CENTER>\n</BODY>\n</HTML>\n\n";
 const char PAGE_CAPTIVE [] PROGMEM ="<HTML>\n<HEAD>\n<title>Captive Portal</title> \n</HEAD>\n<BODY>\n<CENTER>Captive Portal page : $QUERY$- you will be redirected...\n<BR><BR>\nif not redirected, <a href='http://$WEB_ADDRESS$'>click here</a>\n<BR><BR>\n<PROGRESS name='prg' id='prg'></PROGRESS>\n\n<script>\nvar i = 0; \nvar x = document.getElementById(\"prg\"); \nx.max=5; \nvar interval=setInterval(function(){\ni=i+1; \nvar x = document.getElementById(\"prg\"); \nx.value=i; \nif (i>5) \n{\nclearInterval(interval);\nwindow.location.href='/';\n}\n},1000);\n</script>\n</CENTER>\n</BODY>\n</HTML>\n\n";
-
+const char CONTENT_TYPE_HTML [] PROGMEM ="text/html";
 
 void handle_web_interface_root()
 {
@@ -62,23 +65,24 @@ void handle_web_interface_root()
     String contentType =  web_interface->getContentType(path);
     String pathWithGz = path + ".gz";
     //if have a index.html or gzip version this is default root page
-    if(SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) {
+    if((SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) && !web_interface->WebServer.hasArg("fallback") && web_interface->WebServer.arg("forcefallback")!="yes") {
         if(SPIFFS.exists(pathWithGz)) {
             path = pathWithGz;
         }
-        FSFILE file = SPIFFS.open(path, "r");
+         fs::File file = SPIFFS.open(path, "r");
         web_interface->WebServer.streamFile(file, contentType);
         file.close();
         return;
     }
     //if no lets launch the default content
-    web_interface->WebServer.send(500,"text/plain",F("Nothing to display, you must upload files to your board."));
+    web_interface->WebServer.sendHeader("Content-Encoding", "gzip");
+    web_interface->WebServer.send_P(200,CONTENT_TYPE_HTML,PAGE_NOFILES,PAGE_NOFILES_SIZE);
 }
 
 //concat several catched informations temperatures/position/status/flow/speed
 void handle_web_interface_status()
 {
-    static const char NO_TEMP_LINE[] PROGMEM = "\"temperature\":\"0\",\"target\":\"0\",\"active\":\"0\"";
+  //  static const char NO_TEMP_LINE[] PROGMEM = "\"temperature\":\"0\",\"target\":\"0\",\"active\":\"0\"";
     //we do not care if need authentication - just reset counter
     web_interface->is_authenticated();
     int tagpos,tagpos2;
@@ -643,7 +647,7 @@ void handleFileList()
     level_authenticate_type auth_level = web_interface->is_authenticated();
     if (auth_level == LEVEL_GUEST) {
         web_interface->_upload_status=UPLOAD_STATUS_NONE;
-        web_interface->WebServer.send(403,"text/plain","Not allowed, log in first!\n");
+        web_interface->WebServer.send(401,"text/plain","Authentication failed!\n");
         return;
     }
     String path ;
@@ -682,10 +686,10 @@ void handleFileList()
                 if (SPIFFS.remove(filename)) {
                     status = shortname + F(" deleted");
                     //what happen if no "/." and no other subfiles ?
-                    FSDIR dir = SPIFFS.openDir(path);
+                    fs::Dir dir = SPIFFS.openDir(path);
                     if (!dir.next()) {
                         //keep directory alive even empty
-                        FSFILE r = SPIFFS.open(path+"/.","w");
+                         fs::File r = SPIFFS.open(path+"/.","w");
                         if (r) {
                             r.close();
                         }
@@ -706,7 +710,7 @@ void handleFileList()
             filename.replace("//","/");
             if (filename != "/") {
                 bool delete_error = false;
-                FSDIR dir = SPIFFS.openDir(path + shortname);
+                fs::Dir dir = SPIFFS.openDir(path + shortname);
                 {
                     while (dir.next()) {
                         String fullpath = dir.fileName();
@@ -733,7 +737,7 @@ void handleFileList()
             if(SPIFFS.exists(filename)) {
                 status = shortname + F(" already exists!");
             } else {
-                FSFILE r = SPIFFS.open(filename,"w");
+                 fs::File r = SPIFFS.open(filename,"w");
                 if (!r) {
                     status = F("Cannot create ");
                     status += shortname ;
@@ -745,7 +749,7 @@ void handleFileList()
         }
     }
     String jsonfile = "{";
-    FSDIR dir = SPIFFS.openDir(path);
+    fs::Dir dir = SPIFFS.openDir(path);
     jsonfile+="\"files\":[";
     bool firstentry=true;
     String subdirlist="";
@@ -775,7 +779,7 @@ void handleFileList()
         } else {
             //do not add "." file
             if (filename!=".") {
-                FSFILE f = dir.openFile("r");
+                 fs::File f = dir.openFile("r");
                 size = CONFIG::formatBytes(f.size());
                 f.close();
             } else {
@@ -800,7 +804,7 @@ void handleFileList()
     jsonfile+="],";
     jsonfile+="\"path\":\"" + path + "\",";
     jsonfile+="\"status\":\"" + status + "\",";
-    FSINFO info;
+    fs::FSInfo info;
     SPIFFS.info(info);
     jsonfile+="\"total\":\"" + CONFIG::formatBytes(info.totalBytes) + "\",";
     jsonfile+="\"used\":\"" + CONFIG::formatBytes(info.usedBytes) + "\",";
@@ -821,7 +825,7 @@ void handle_serial_SDFileList()
     if (web_interface->is_authenticated() == LEVEL_GUEST) {
         web_interface->_upload_status=UPLOAD_STATUS_NONE;
         web_interface->WebServer.sendHeader("Cache-Control", "no-cache");
-        web_interface->WebServer.send(403, "application/json", "{\"status\":\"Authentication failed\"}");
+        web_interface->WebServer.send(401, "application/json", "{\"status\":\"Authentication failed!\"}");
         return;
     }
     LOG("serial SD upload done\r\n")
@@ -873,7 +877,7 @@ void handle_not_found()
             if(SPIFFS.exists(pathWithGz)) {
                 path = pathWithGz;
             }
-            FSFILE file = SPIFFS.open(path, "r");
+            fs::File file = SPIFFS.open(path, "r");
             web_interface->WebServer.streamFile(file, contentType);
             file.close();
             return;
@@ -910,7 +914,7 @@ void handle_not_found()
             if(SPIFFS.exists(pathWithGz)) {
                 path = pathWithGz;
             }
-            FSFILE file = SPIFFS.open(path, "r");
+             fs::File file = SPIFFS.open(path, "r");
             web_interface->WebServer.streamFile(file, contentType);
             file.close();
            
@@ -940,129 +944,171 @@ void handle_not_found()
 #ifdef AUTHENTICATION_FEATURE
 void handle_login()
 {
-    static const char NOT_AUTH_LOG [] PROGMEM = "HTTP/1.1 301 OK\r\nSet-Cookie: ESPSESSIONID=0\r\nLocation: /login\r\nCache-Control: no-cache\r\n\r\n";
-
     String smsg;
-    String sReturn;
     String sUser,sPassword;
-    String buffer2send;
+    String auths;
+    int code = 200;
     bool msg_alert_error=false;
+    //disconnect can be done anytime no need to check credential
     if (web_interface->WebServer.hasArg("DISCONNECT")) {
-        web_interface->WebServer.sendContent_P(NOT_AUTH_LOG);
+        String cookie = web_interface->WebServer.header("Cookie");
+        int pos = cookie.indexOf("ESPSESSIONID=");
+        String sessionID;
+        if (pos!= -1) {
+            int pos2 = cookie.indexOf(";",pos);
+            sessionID = cookie.substring(pos+strlen("ESPSESSIONID="),pos2);
+            }
+        web_interface->ClearAuthIP(web_interface->WebServer.client().remoteIP(), sessionID.c_str());
+        web_interface->WebServer.sendHeader("Set-Cookie","ESPSESSIONID=0");
+        web_interface->WebServer.sendHeader("Cache-Control","no-cache");
+        String buffer2send = "{\"status\":\"Ok\",\"authentication_lvl\":\"guest\"}";
+        web_interface->WebServer.send(code, "application/json", buffer2send);
         //web_interface->WebServer.client().stop();
         return;
     }
-    //check is it is a submission or a display
-    smsg="";
-    if (web_interface->WebServer.hasArg("return")) {
-        sReturn = web_interface->WebServer.arg("return");
-    }
+    
+    level_authenticate_type auth_level= web_interface->is_authenticated();
+   if (auth_level == LEVEL_GUEST) auths = F("guest");
+    else if (auth_level == LEVEL_USER) auths = F("user");
+    else if (auth_level == LEVEL_ADMIN) auths = F("admin");
+    else auths = F("???");
+        
+    //check is it is a submission or a query
     if (web_interface->WebServer.hasArg("SUBMIT")) {
-        //is there a correct list of values?
+        //is there a correct list of query?
         if ( web_interface->WebServer.hasArg("PASSWORD")&& web_interface->WebServer.hasArg("USER")) {
             //USER
             sUser = web_interface->WebServer.arg("USER");
             if ( !((sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) || (sUser==FPSTR(DEFAULT_USER_LOGIN)))) {
                 msg_alert_error=true;
-                smsg.concat(F("Error : Incorrect User<BR>"));
+                smsg=F("Error : Incorrect User");
+                code=401;
             }
-            //Password
-            sPassword = web_interface->WebServer.arg("PASSWORD");
-            String sadminPassword;
+            if (msg_alert_error == false) {
+                //Password
+                sPassword = web_interface->WebServer.arg("PASSWORD");
+                String sadminPassword;
 
-            if (!CONFIG::read_string(EP_ADMIN_PWD, sadminPassword, MAX_LOCAL_PASSWORD_LENGTH)) {
-                sadminPassword=FPSTR(DEFAULT_ADMIN_PWD);
-            }
+                if (!CONFIG::read_string(EP_ADMIN_PWD, sadminPassword, MAX_LOCAL_PASSWORD_LENGTH)) {
+                    sadminPassword=FPSTR(DEFAULT_ADMIN_PWD);
+                }
 
-            String suserPassword;
+                String suserPassword;
 
-            if (!CONFIG::read_string(EP_USER_PWD, suserPassword, MAX_LOCAL_PASSWORD_LENGTH)) {
-                suserPassword=FPSTR(DEFAULT_USER_PWD);
-            }
+                if (!CONFIG::read_string(EP_USER_PWD, suserPassword, MAX_LOCAL_PASSWORD_LENGTH)) {
+                    suserPassword=FPSTR(DEFAULT_USER_PWD);
+                }
 
-            if(!(((sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) && (strcmp(sPassword.c_str(),sadminPassword.c_str())==0)) ||
-                    ((sUser==FPSTR(DEFAULT_USER_LOGIN)) && (strcmp(sPassword.c_str(),suserPassword.c_str()) == 0)))) {
-                msg_alert_error=true;
-                smsg.concat(F("Error: Incorrect password<BR>"));
+                if(!(((sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) && (strcmp(sPassword.c_str(),sadminPassword.c_str())==0)) ||
+                        ((sUser==FPSTR(DEFAULT_USER_LOGIN)) && (strcmp(sPassword.c_str(),suserPassword.c_str()) == 0)))) {
+                    msg_alert_error=true;
+                    smsg=F("Error: Incorrect password");
+                    code = 401;
+                }
             }
         } else {
             msg_alert_error=true;
             smsg = F("Error: Missing data");
+            code = 500;
         }
-
-        //if no error login is ok
-        if (msg_alert_error==false) {
-            auth_ip * current_auth = new auth_ip;
-            if(sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) {
-                current_auth->level = LEVEL_ADMIN;
+        //change password
+        if ( web_interface->WebServer.hasArg("PASSWORD")&& web_interface->WebServer.hasArg("USER") && web_interface->WebServer.hasArg("NEWPASSWORD") && (msg_alert_error==false) ) {
+            String newpassword =  web_interface->WebServer.arg("NEWPASSWORD");
+            if (CONFIG::isLocalPasswordValid(newpassword.c_str())) {
+                int pos=0;
+                if(sUser==FPSTR(DEFAULT_ADMIN_LOGIN)) pos = EP_ADMIN_PWD;
+                else pos = EP_USER_PWD;
+                if (!CONFIG::write_string(pos,newpassword.c_str())){
+                     msg_alert_error=true;
+                     smsg = F("Error: Cannot apply changes");
+                     code = 500;
+                }
             } else {
-                current_auth->level = LEVEL_USER;
+                msg_alert_error=true;
+                smsg = F("Error: Incorrect password");
+                code = 500;
             }
+        }
+   if ((code == 200) || (code == 500)) {
+       level_authenticate_type current_auth_level;
+      if(sUser == FPSTR(DEFAULT_ADMIN_LOGIN)) {
+            current_auth_level = LEVEL_ADMIN;
+        } else  if(sUser == FPSTR(DEFAULT_USER_LOGIN)){
+            current_auth_level = LEVEL_USER;
+        } else {
+            current_auth_level = LEVEL_GUEST;
+        }
+        //create Session
+        if ((current_auth_level != auth_level) || (auth_level== LEVEL_GUEST)) {
+            auth_ip * current_auth = new auth_ip;
+            current_auth->level = current_auth_level;
             current_auth->ip=web_interface->WebServer.client().remoteIP();
             strcpy(current_auth->sessionID,web_interface->create_session_ID());
+            strcpy(current_auth->userID,sUser.c_str());
             current_auth->last_time=millis();
             if (web_interface->AddAuthIP(current_auth)) {
-                String header = F("HTTP/1.1 301 OK\r\nSet-Cookie: ESPSESSIONID=");
-                header+=current_auth->sessionID;
-                header+="\r\nLocation: /";
-                header+=sReturn;
-                header.concat(F("\r\nCache-Control: no-cache\r\n\r\n"));
-                web_interface->WebServer.sendContent(header);
-                //web_interface->WebServer.client().stop();
-                return;
+                String tmps ="ESPSESSIONID="; 
+                tmps+=current_auth->sessionID;
+                web_interface->WebServer.sendHeader("Set-Cookie",tmps);
+                web_interface->WebServer.sendHeader("Cache-Control","no-cache");
+                switch(current_auth->level) {
+                    case LEVEL_ADMIN:
+                        auths = "admin";
+                        break;
+                     case LEVEL_USER:
+                        auths = "user";
+                        break;
+                    default:
+                        auths = "guest";
+                    }
             } else {
                 delete current_auth;
                 msg_alert_error=true;
+                code = 500;
                 smsg = F("Error: Too many connections");
             }
         }
-    }
-
-    else { //no submit need to get data from EEPROM
-        sUser=String();
-        //password
-        sPassword=String();
-    }
-
+   } 
+    if (code == 200) smsg = F("Ok");
+    
     //build  JSON
-    level_authenticate_type auth_level= web_interface->is_authenticated();
-    if (!msg_alert_error)smsg = F("Ok");
-    buffer2send = "{\"status\":\"" + smsg + "\",\"authentication_lvl\":\"";
-    if (auth_level == LEVEL_GUEST) buffer2send += F("guest");
-    else if (auth_level == LEVEL_USER) buffer2send += F("user");
-    else if (auth_level == LEVEL_ADMIN) buffer2send += F("admin");
-    else buffer2send += F("???");
+    String buffer2send = "{\"status\":\"" + smsg + "\",\"authentication_lvl\":\"";
+    buffer2send += auths;
     buffer2send += "\"}";
-    web_interface->WebServer.send(200, "application/json", buffer2send);
+    web_interface->WebServer.send(code, "application/json", buffer2send);
+    } else {
+    if (auth_level != LEVEL_GUEST) {
+        String cookie = web_interface->WebServer.header("Cookie");
+        int pos = cookie.indexOf("ESPSESSIONID=");
+        String sessionID;
+        if (pos!= -1) {
+            int pos2 = cookie.indexOf(";",pos);
+            sessionID = cookie.substring(pos+strlen("ESPSESSIONID="),pos2);
+            auth_ip * current_auth_info = web_interface->GetAuth(web_interface->WebServer.client().remoteIP(), sessionID.c_str());
+            if (current_auth_info != NULL){
+                    sUser = current_auth_info->userID;
+                }
+        }
+    }
+    String buffer2send = "{\"status\":\"200\",\"authentication_lvl\":\"";
+    buffer2send += auths;
+    buffer2send += "\",\"user\":\"";
+    buffer2send += sUser;
+    buffer2send +="\"}";
+    web_interface->WebServer.send(code, "application/json", buffer2send);
+    }
 }
 #endif
 
-//Handle the current level of authentication
-void handle_check_auth()
-{
-    level_authenticate_type auth_level= web_interface->is_authenticated();
-    String lvl;
-    if (auth_level == LEVEL_GUEST) {
-        lvl = "guest";
-    } else  if (auth_level == LEVEL_USER) {
-        lvl = "user";
-    } else if (auth_level == LEVEL_ADMIN) {
-        lvl = "admin";
-    } else {
-        lvl = "???";
-    }
-    lvl+="\n";
-    web_interface->WebServer.send(200,"text/plain",lvl.c_str());
-}
 
 //Handle web command query and send answer
 void handle_web_command()
 {
     level_authenticate_type auth_level= web_interface->is_authenticated();
-    if (auth_level == LEVEL_GUEST) {
+  /*  if (auth_level == LEVEL_GUEST) {
         web_interface->WebServer.send(403,"text/plain","Not allowed, log in first!\n");
         return;
-    }
+    }*/
     String buffer2send = "";
     LOG(String (web_interface->WebServer.args()))
     LOG(" Web command\r\n")
@@ -1101,6 +1147,11 @@ void handle_web_command()
             //Split in command and parameters
             String cmd_part1=cmd.substring(ESPpos+4,ESPpos2);
             String cmd_part2="";
+            //only [ESP800] is allowed login free if authentication is enabled
+             if ((auth_level == LEVEL_GUEST)  && (cmd_part1.toInt()!=800)) {
+                web_interface->WebServer.send(401,"text/plain","Authentication failed!\n");
+                return;
+            }
             //is there space for parameters?
             if (ESPpos2<cmd.length()) {
                 cmd_part2=cmd.substring(ESPpos2+1);
@@ -1113,6 +1164,10 @@ void handle_web_command()
             //if not is not a valid [ESPXXX] command
         }
     } else {
+         if (auth_level == LEVEL_GUEST) {
+        web_interface->WebServer.send(401,"text/plain","Authentication failed!\n");
+        return;
+    }
         //send command to serial as no need to transfer ESP command
         //to avoid any pollution if Uploading file to SDCard
         if ((web_interface->blockserial) == false) {
@@ -1250,7 +1305,7 @@ void handle_web_command_silent()
 {
     level_authenticate_type auth_level= web_interface->is_authenticated();
     if (auth_level == LEVEL_GUEST) {
-        web_interface->WebServer.send(403,"text/plain","Not allowed, log in first!\n");
+        web_interface->WebServer.send(401,"text/plain","Authentication failed!\n");
         return;
     }
     String buffer2send = "";
@@ -1333,12 +1388,8 @@ WEBINTERFACE_CLASS::WEBINTERFACE_CLASS (int port):WebServer(port)
 {
     //init what will handle "/"
     WebServer.on("/",HTTP_ANY, handle_web_interface_root);
-    WebServer.on("/check_auth",HTTP_ANY, handle_check_auth);
     WebServer.on("/command",HTTP_ANY, handle_web_command);
     WebServer.on("/command_silent",HTTP_ANY, handle_web_command_silent);
-#ifdef SDCARD_FEATURE
-    WebServer.on("/upload", HTTP_ANY, handle_direct_SDFileList,SDFile_direct_upload);
-#endif
     WebServer.on("/upload_serial", HTTP_ANY, handle_serial_SDFileList,SDFile_serial_upload);
     WebServer.on("/files", HTTP_ANY, handleFileList,SPIFFSFileupload);
 #ifdef WEB_UPDATE_FEATURE
@@ -1368,7 +1419,7 @@ WEBINTERFACE_CLASS::WEBINTERFACE_CLASS (int port):WebServer(port)
     status_msg.setsize(4);
     status_msg.setlength(50);
 #endif
-    fsUploadFile=(FSFILE)0;
+    fsUploadFile=( fs::File)0;
     _head=NULL;
     _nb_ip=0;
     _upload_status=UPLOAD_STATUS_NONE;
@@ -1444,6 +1495,56 @@ char * WEBINTERFACE_CLASS::create_session_ID()
     }
     return sessionID;
 }
+
+
+
+bool WEBINTERFACE_CLASS::ClearAuthIP(IPAddress ip, const char * sessionID){
+    auth_ip * current = _head;
+    auth_ip * previous = NULL;
+    bool done = false;
+    while (current) {
+        if ((ip == current->ip) && (strcmp(sessionID,current->sessionID)==0)) {
+            //remove
+            done = true;
+            if (current ==_head) {
+                _head=current->_next;
+                _nb_ip--;
+                delete current;
+                current=_head;
+            } else {
+                previous->_next=current->_next;
+                _nb_ip--;
+                delete current;
+                current=previous->_next;
+            }
+        } else {
+            previous = current;
+            current=current->_next;
+        }
+    }
+    return done;
+}
+
+//Get info
+auth_ip * WEBINTERFACE_CLASS::GetAuth(IPAddress ip,const char * sessionID)
+{
+    auth_ip * current = _head;
+    auth_ip * previous = NULL;
+    //get time
+    //uint32_t now = millis();
+    while (current) {
+        if (ip==current->ip) {
+            if (strcmp(sessionID,current->sessionID)==0) {
+                //found
+                return current;
+            }
+        }
+        previous = current;
+        current=current->_next;
+    }
+    return NULL;
+}
+
 //Review all IP to reset timers
 level_authenticate_type WEBINTERFACE_CLASS::ResetAuthIP(IPAddress ip,const char * sessionID)
 {

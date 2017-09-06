@@ -44,6 +44,8 @@ public:
     int32_t getSignal(int32_t RSSI);
     bool Setup(bool force_ap = false);
     void Safe_Setup();
+    bool Enable_servers();
+    bool Disable_servers();
     const char * get_default_hostname();
     const char * get_hostname();
 private:

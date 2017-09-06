@@ -38,6 +38,12 @@ if authentication is on, need admin password
 if authentication is on, need admin password
 [ESP107]<mode>pwd=<admin password>
 
+* Set wifi on/off
+[ESP110]<state>
+state can be ON, OFF, RESTART
+if authentication is on, need admin password
+[ESP110]<state>pwd=<admin password>
+
 * Get current IP
 [ESP111]<header answer>
 
@@ -91,7 +97,7 @@ if no password set it use default one
 * Read SPIFFS file and send each line to serial
 [ESP700]<filename>
 
-* Get fw version
+* Get fw version and basic information
 [ESP800]<header answer>
 
 * Get fw target
