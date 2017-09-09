@@ -1403,6 +1403,11 @@ WEBINTERFACE_CLASS::WEBINTERFACE_CLASS (int port):WebServer(port)
 #ifdef SSDP_FEATURE
     WebServer.on("/description.xml", HTTP_GET, handle_SSDP);
 #endif
+#ifdef CAPTIVE_PORTAL_FEATURE
+    WebServer.on("/generate_204",HTTP_ANY, handle_web_interface_root);
+    WebServer.on("/gconnectivitycheck.gstatic.com",HTTP_ANY, handle_web_interface_root);
+    WebServer.on("/fwlink",HTTP_ANY, handle_web_interface_root);
+#endif
     WebServer.onNotFound( handle_not_found);
     blockserial = false;
     restartmodule=false;

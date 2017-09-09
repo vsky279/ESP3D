@@ -141,7 +141,7 @@ extern "C" {
 }
 #include "wifi.h"
 //version and sources location
-#define FW_VERSION "0.9.850"
+#define FW_VERSION "0.9.851"
 #define REPOSITORY "https://github.com/luc-github/ESP3D"
 
 typedef enum {
