@@ -70,9 +70,7 @@ Web Page refresh: 3 secondes
 User (if authentication is enabled): admin     
 Password (if authentication is enabled): admin
 User (if authentication is enabled):user
-Password(if authentication is enabled): user
-
-Additionally 404.html (the page not found) is not mandatory, a fail safe version is embeded if it is not present.     
+Password(if authentication is enabled): user 
 
 ## Installation
 Please use [Arduino IDE 1.8.4](http://arduino.cc/en/Main/Software)
@@ -123,7 +121,7 @@ On ESP8266 for better performance select CPU Frequency to be 160MHz instead of d
 
 ## After flash
 UI is present in data directory and must be flashed on SPIFFS also but latest version can found at https://github.com/luc-github/ESP3D-WEBUI   
-
+404.html (the page not found) is not mandatory, a fail safe version is embeded if it is not present.    
 If no index.html.gz file is found a default web page is displayed to upload web server files (the ones present in data directory), this page can also be used to flash FW    
 You can also use a pluggin to flash data content to SPIFFS.   
 * For ESP8266: installation and usage is explained [here](https://github.com/esp8266/Arduino/blob/master/doc/filesystem.md#uploading-files-to-file-system)    
