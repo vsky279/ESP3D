@@ -1,14 +1,16 @@
 # ESP3D
-Firmware for ESP8266/ESP285 used with 3D printer using [arduino core version](https://github.com/esp8266/Arduino)   
+Firmware used with 3D printer  for :   
+ESP8266/ESP285 using [arduino core version](https://github.com/esp8266/Arduino)   
+ESP32 using [arduino core version](https://github.com/espressif/arduino-esp32)   
 This firmware allows not only to have a cheap bridge between Wifi and serial, but also to have a web UI to configure wifi, to monitor 3D printer and even control it, and to make things easy,
 UI is fully customizable without reflashing FW.
 Firmware should work with any 3D printer firmware (repetier/marlin/etc..) if serial connection has correct setup.
 I currently use it with my personnal flavor of [repetier for Due based boards](https://github.com/luc-github/Repetier-Firmware-0.92).
-Please use ESP with at least 1M flash
+Please use ESP8266 with at least 1M flash to get Web Update working
 
 <u>Stable version:</u>    
 <u>Development version:</u>    
-Arduino ide 1.8.0 with git from ESP8266 : [![build status](https://travis-ci.org/luc-github/ESP3D.svg?branch=master)](https://travis-ci.org/luc-github/ESP3D)
+Arduino ide 1.8.4 with git from ESP8266 : [![build status](https://travis-ci.org/luc-github/ESP3D.svg?branch=devt)](https://travis-ci.org/luc-github/ESP3D)
 
 [All releases](https://github.com/luc-github/ESP3D/wiki)
 
@@ -45,6 +47,8 @@ Especially if need to buy new modules for testing.
 *Baud Rate for serial (supported : 9600, 19200, 38400, 57600, 115200, 230400, 250000)    
 *web port and data port      
 
+##Commands
+The list of available commands is here: [command.txt](https://raw.githubusercontent.com/luc-github/ESP3D/devt/docs/Commands.txt)    
     
 ## Default Configuration      
 Default Settings:    
@@ -68,12 +72,18 @@ Password (if authentication is enabled): admin
 User (if authentication is enabled):user
 Password(if authentication is enabled): user
 
-Additionally 404.html (the page not found) is not mandatory, a fail safe version is embeded if it isnot present.     
+Additionally 404.html (the page not found) is not mandatory, a fail safe version is embeded if it is not present.     
 
 ## Installation
-Please use [Arduino IDE 1.8.0](http://arduino.cc/en/Main/Software) and [git version of esp8266 module](http://esp8266.github.io/Arduino/versions/2.2.0/doc/installing.html#using-git-version)
+Please use [Arduino IDE 1.8.4](http://arduino.cc/en/Main/Software)
+and install ESP core according your board:
+* ESP8266/ESP8586
+https://github.com/esp8266/Arduino#using-git-version
+* ESP32
+https://github.com/espressif/arduino-esp32#installation-instructions
+In addition you will need to copy the WebServer and DNSServer libraries to library directory of ESP32 as they are currently not installed by default
 
-UI is present in data directory and must be flashed on SPIFFS also but latest version can found at https://github.com/luc-github/ESP3D-WEBUI
+
 
 * Parameter to flash the module :   
 ```
@@ -102,13 +112,25 @@ UI is present in data directory and must be flashed on SPIFFS also but latest ve
 //RECOVERY_FEATURE: allow to use GPIO2 pin as hardware reset for EEPROM, add 8s to boot time to let user to jump GPIO2 to GND
 #define RECOVERY_FEATURE
 ```
-## After flash
-Go to  ESP3D tab and edit settings to match your printer ( printer firmware, possible SD access, etc...)
+##ESP8266/ESP8586
+On ESP8266 for better performance select CPU Frequency to be 160MHz instead of default 80MHz
 
-For better performance select CPU Frequency to be 160MHz instead of default 80MHz   
-Use IDE to upload directly  (latest version of board manager module generate one binary)     
+##ESP32
+* To get silent boot connect GPIO 15 to GND or select default output as Serial2 instead of Serial in config.h
+`#define ESP_SERIAL_OUT Serial2`
+
+*Currently NETBIOS and SSDP libraries are not available on ESP32 and are automaticaly disabled.
+
+## After flash
+UI is present in data directory and must be flashed on SPIFFS also but latest version can found at https://github.com/luc-github/ESP3D-WEBUI   
+
+If no index.html.gz file is found a default web page is displayed to upload web server files (the ones present in data directory), this page can also be used to flash FW    
+You can also use a pluggin to flash data content to SPIFFS.   
+* For ESP8266: installation and usage is explained [here](https://github.com/esp8266/Arduino/blob/master/doc/filesystem.md#uploading-files-to-file-system)    
+If no target firmware is defined (Marlin / repetier, etc...) do not forget to set it during setup wizard or after in ESP3D settings   
+   
 * To flash the html files present in data directory you need to use another tool, installation and usage is explained [here](https://github.com/esp8266/Arduino/blob/master/doc/filesystem.md#uploading-files-to-file-system)    
-Once flashed you also can use the web updater to flash new FW in System Configuration Page or go to settings to change html files 
+Once flashed you also can use the web updater to flash new FW in System Configuration Page or go to settings to change html files   
 
 <H3>:warning:Do not flash Printer fw with ESP connected - it bring troubles, at least on DaVinci</H3>
 
