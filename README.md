@@ -1,6 +1,6 @@
 # ESP3D
 Firmware used with 3D printer  for :   
-ESP8266/ESP285 using [arduino core version](https://github.com/esp8266/Arduino)   
+ESP8266/ESP8285 using [arduino core version](https://github.com/esp8266/Arduino)   
 ESP32 using [arduino core version](https://github.com/espressif/arduino-esp32)   
 This firmware allows not only to have a cheap bridge between Wifi and serial, but also to have a web UI to configure wifi, to monitor 3D printer and even control it, and to make things easy,
 UI is fully customizable without reflashing FW.
@@ -75,7 +75,7 @@ Password(if authentication is enabled): user
 ## Installation
 Please use [Arduino IDE 1.8.4](http://arduino.cc/en/Main/Software)
 and install ESP core according your board:
-* ESP8266/ESP8586
+* ESP8266/ESP8285
 https://github.com/esp8266/Arduino#using-git-version
 * ESP32
 https://github.com/espressif/arduino-esp32#installation-instructions
@@ -110,7 +110,7 @@ In addition you will need to copy the WebServer and DNSServer libraries to libra
 //RECOVERY_FEATURE: allow to use GPIO2 pin as hardware reset for EEPROM, add 8s to boot time to let user to jump GPIO2 to GND
 #define RECOVERY_FEATURE
 ```
-## ESP8266/ESP8586
+## ESP8266/ESP8285
 On ESP8266 for better performance select CPU Frequency to be 160MHz instead of default 80MHz
 
 ## ESP32
