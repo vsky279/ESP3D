@@ -47,7 +47,7 @@ Especially if need to buy new modules for testing.
 *Baud Rate for serial (supported : 9600, 19200, 38400, 57600, 115200, 230400, 250000)    
 *web port and data port      
 
-##Commands
+## Commands
 The list of available commands is here: [command.txt](https://raw.githubusercontent.com/luc-github/ESP3D/devt/docs/Commands.txt)    
     
 ## Default Configuration      
@@ -112,10 +112,10 @@ In addition you will need to copy the WebServer and DNSServer libraries to libra
 //RECOVERY_FEATURE: allow to use GPIO2 pin as hardware reset for EEPROM, add 8s to boot time to let user to jump GPIO2 to GND
 #define RECOVERY_FEATURE
 ```
-##ESP8266/ESP8586
+## ESP8266/ESP8586
 On ESP8266 for better performance select CPU Frequency to be 160MHz instead of default 80MHz
 
-##ESP32
+## ESP32
 * To get silent boot connect GPIO 15 to GND or select default output as Serial2 instead of Serial in config.h
 `#define ESP_SERIAL_OUT Serial2`
 
