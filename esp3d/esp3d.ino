@@ -23,31 +23,53 @@
     Main author: luc lebosse
 
 */
-//be sure correct IDE and settings are used for ESP8266
-#ifndef ARDUINO_ARCH_ESP8266
-#error Oops!  Make sure you have 'ESP8266' compatible board selected from the 'Tools -> Boards' menu.
+//be sure correct IDE and settings are used for ESP8266 or ESP32
+#if !(defined( ARDUINO_ARCH_ESP8266) || defined(ARDUINO_ARCH_ESP32))
+#error Oops!  Make sure you have 'ESP8266 or ESP32' compatible board selected from the 'Tools -> Boards' menu.
 #endif
 #include <EEPROM.h>
 #include "config.h"
-#include "wifi.h"
+#include "wificonf.h"
 #include "bridge.h"
 #include "webinterface.h"
 #include "command.h"
-#include <ESP8266WiFi.h>
-#include <WiFiClient.h>
-#include <ESP8266WebServer.h>
+#ifdef ARDUINO_ARCH_ESP8266
+#include "ESP8266WiFi.h"
 #ifdef MDNS_FEATURE
 #include <ESP8266mDNS.h>
 #endif
+#include <ESP8266WebServer.h>
+#else
+#include <WiFi.h>
+#ifdef MDNS_FEATURE
+#include <ESPmDNS.h>
+#endif
+#include "esp_wifi.h"
+#include <WebServer.h>
+#include "FS.h"
+#include "SPIFFS.h"
+#include "Update.h"
+#endif
+#include <WiFiClient.h>
+
+
 #ifdef CAPTIVE_PORTAL_FEATURE
 #include <DNSServer.h>
 extern DNSServer dnsServer;
 #endif
 #ifdef SSDP_FEATURE
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266SSDP.h>
+#else
+//#include <ESPSSDP.h>
+#endif
 #endif
 #ifdef NETBIOS_FEATURE
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266NetBIOS.h>
+#else
+//#include <ESPNetBIOS.h>
+#endif
 #endif
 #ifndef FS_NO_GLOBALS
 #define FS_NO_GLOBALS
@@ -64,7 +86,7 @@ void setup()
 #endif
     // init:
 #ifdef DEBUG_ESP3D
-    Serial.begin(DEFAULT_BAUD_RATE);
+    if (ESP_SERIAL_OUT.baudRate() != DEFAULT_BAUD_RATE)ESP_SERIAL_OUT.begin(DEFAULT_BAUD_RATE);
     delay(2000);
     LOG("\r\nDebug Serial set\r\n")
 #endif
@@ -89,10 +111,12 @@ void setup()
     //reset is requested
     if(breset_config) {
         //update EEPROM with default settings
-        Serial.begin(DEFAULT_BAUD_RATE);
-        Serial.setRxBufferSize(SERIAL_RX_BUFFER_SIZE);
+        if (ESP_SERIAL_OUT.baudRate() != DEFAULT_BAUD_RATE)ESP_SERIAL_OUT.begin(DEFAULT_BAUD_RATE);
+#ifdef ARDUINO_ARCH_ESP8266
+        ESP_SERIAL_OUT.setRxBufferSize(SERIAL_RX_BUFFER_SIZE);
+#endif
         delay(2000);
-        Serial.println(F("M117 ESP EEPROM reset"));
+        ESP_SERIAL_OUT.println(F("M117 ESP EEPROM reset"));
 #ifdef DEBUG_ESP3D
         CONFIG::print_config(DEBUG_PIPE, true);
         delay(1000);
@@ -101,32 +125,40 @@ void setup()
         delay(1000);
         //put some default value to a void some exception at first start
         WiFi.mode(WIFI_AP);
+#ifdef ARDUINO_ARCH_ESP8266
         WiFi.setPhyMode(WIFI_PHY_MODE_11G);
+#else 
+	esp_wifi_set_protocol(ESP_IF_WIFI_AP, WIFI_PHY_MODE_11G);
+#endif
         CONFIG::esp_restart();
     }
 #if defined(DEBUG_ESP3D) && defined(DEBUG_OUTPUT_SERIAL)
     LOG("\r\n");
     delay(500);
-    Serial.flush();
+    ESP_SERIAL_OUT.flush();
 #endif
     //get target FW
     CONFIG::InitFirmwareTarget();
     //Update is done if any so should be Ok
-    SPIFFS.begin();
+#ifdef ARDUINO_ARCH_ESP32
+    SPIFFS.begin(true);
+#else
+	SPIFFS.begin();
+#endif
        
     //setup wifi according settings
     if (!wifi_config.Setup()) {
-        Serial.println(F("M117 Safe mode 1"));
+        ESP_SERIAL_OUT.println(F("M117 Safe mode 1"));
         //try again in AP mode
        if (!wifi_config.Setup(true)) {
-            Serial.println(F("M117 Safe mode 2"));
+            ESP_SERIAL_OUT.println(F("M117 Safe mode 2"));
             wifi_config.Safe_Setup();
         }
     }
     delay(1000);
     //setup servers
     if (!wifi_config.Enable_servers()) {
-        Serial.println(F("M117 Error enabling servers"));
+        ESP_SERIAL_OUT.println(F("M117 Error enabling servers"));
     }
     LOG("Setup Done\r\n");
 }
@@ -144,7 +176,7 @@ void loop()
         }
 #endif
 //web requests
-        web_interface->WebServer.handleClient();
+        web_interface->web_server.handleClient();
 #ifdef TCP_IP_DATA_FEATURE
         BRIDGE::processFromTCP2Serial();
 #endif

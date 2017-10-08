@@ -97,6 +97,12 @@ if no password set it use default one
 * Read SPIFFS file and send each line to serial
 [ESP700]<filename>
 
+* Format SPIFFS
+[ESP710]FORMAT pwd=<admin password>
+
+* SPIFFS total size and used size
+[ESP720]<header answer>
+
 * Get fw version and basic information
 [ESP800]<header answer>
 

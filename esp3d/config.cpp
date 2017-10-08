@@ -19,12 +19,26 @@
 */
 #include "config.h"
 #include <EEPROM.h>
+#ifndef FS_NO_GLOBALS
+#define FS_NO_GLOBALS
+#endif
+#include <FS.h>
 #include <WiFiUdp.h>
-#include "wifi.h"
+#include "wificonf.h"
+#ifdef ARDUINO_ARCH_ESP8266
 extern "C" {
 #include "user_interface.h"
 }
+#else
+#include "Update.h"
+#include "esp_wifi.h"
+#endif
 #include "bridge.h"
+
+#ifdef ARDUINO_ARCH_ESP32
+//This is output for ESP32 to avoid garbage
+HardwareSerial Serial2(2);
+#endif
 
 uint8_t CONFIG::FirmwareTarget = UNKNOWN_FW;
 
@@ -69,6 +83,7 @@ void CONFIG::InitFirmwareTarget(){
 
 void CONFIG::InitDirectSD(){
  CONFIG::is_direct_sd = false;
+
 }
 
 bool CONFIG::InitBaudrate(){
@@ -76,8 +91,10 @@ bool CONFIG::InitBaudrate(){
      if ( !CONFIG::read_buffer(EP_BAUD_RATE,  (byte *)&baud_rate, INTEGER_LENGTH)) return false;
       if ( ! (baud_rate==9600 || baud_rate==19200 ||baud_rate==38400 ||baud_rate==57600 ||baud_rate==115200 ||baud_rate==230400 ||baud_rate==250000) ) return false;
      //setup serial
-     Serial.begin(baud_rate);
-     Serial.setRxBufferSize(SERIAL_RX_BUFFER_SIZE);
+     if (ESP_SERIAL_OUT.baudRate() != baud_rate)ESP_SERIAL_OUT.begin(baud_rate);
+#ifdef ARDUINO_ARCH_ESP8266
+     ESP_SERIAL_OUT.setRxBufferSize(SERIAL_RX_BUFFER_SIZE);
+#endif
      wifi_config.baud_rate=baud_rate;
      delay(1000);
      return true;
@@ -89,12 +106,610 @@ bool CONFIG::InitExternalPorts(){
     return true;
 }
 
+#ifdef SDCARD_CONFIG_FEATURE
+bool CONFIG::update_settings(){
+    String filename = SDCARD_CONFIG_FILENAME;
+    filename.toLowerCase();
+    //there is a config file
+    LOG("Check ")
+    LOG(filename)
+    LOG("\r\n")
+    bool answer = true;
+    if(SD.exists((const char *)filename.c_str())) {
+        bool success = true;
+        bool localerror = false;
+        const size_t bufferLen = 250;
+        char buffer[bufferLen];
+        byte ip_sav[4];
+        String stmp;
+        int itmp;
+        long baud_rate=0;
+        byte bflag;
+        LOG("Found config file\r\n")
+        String newfilename = filename;
+        IniFile espconfig((char *)filename.c_str());
+        //validate file is correct
+        if (espconfig.open()) {
+            if (!espconfig.validate(buffer, bufferLen)) {
+                success = false;
+                LOG("Invalid config file\r\n")
+            } else { //file format is correct - let parse the settings
+                //Section [wifi]
+                //Hostname
+                //hostname = myesp
+                if (espconfig.getValue("network", "hostname", buffer, bufferLen)) {
+                    if (!CONFIG::isHostnameValid(buffer)) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_HOSTNAME,buffer)) {
+                        success = false;
+                    }
+                }
+                //baudrate = 115200
+                if (espconfig.getValue("network", "baudrate", buffer, bufferLen, baud_rate)) {
+                    if(!CONFIG::write_buffer(EP_BAUD_RATE,(const byte *)&baud_rate,INTEGER_LENGTH)) {
+                        success = false;
+                    }
+                }
+                //webport = 80
+                if (espconfig.getValue("network", "webport", buffer, bufferLen, itmp)) {
+                    if(!CONFIG::write_buffer(EP_WEB_PORT,(const byte *)&itmp,INTEGER_LENGTH)) {
+                        success = false;
+                    }
+                }
+                //dataport = 8888
+                if (espconfig.getValue("network", "dataport", buffer, bufferLen, itmp)) {
+                    if(!CONFIG::write_buffer(EP_DATA_PORT,(const byte *)&itmp,INTEGER_LENGTH)) {
+                        success = false;
+                    }
+                }
+                //adminpwd = admin
+                if (espconfig.getValue("network", "adminpwd", buffer, bufferLen)) {
+                    if (!CONFIG::isLocalPasswordValid(buffer)) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_ADMIN_PWD,buffer)) {
+                        success = false;
+                    }
+                }
+                //userpwd = user
+                if (espconfig.getValue("network", "userpwd", buffer, bufferLen)) {
+                    if (!CONFIG::isLocalPasswordValid(buffer)) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_USER_PWD,buffer)) {
+                        success = false;
+                    }
+                }
+                //sleep = none
+                if (espconfig.getValue("network", "sleep", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="none") {
+                        bflag = WIFI_NONE_SLEEP;
+#ifdef ARDUINO_ARCH_ESP8266
+                    } else  if (stmp =="light") {
+                        bflag = WIFI_LIGHT_SLEEP;
+#endif
+                    } else  if (stmp =="modem") {
+                        bflag = WIFI_MODEM_SLEEP;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_SLEEP_MODE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //wifimode = STA
+                if (espconfig.getValue("network", "wifimode", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="sta") {
+                        bflag = CLIENT_MODE;
+                    } else  if (stmp =="ap") {
+                        bflag = AP_MODE;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_WIFI_MODE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //STAssid = NETGEAR_2GEXT_OFFICE2
+                if (espconfig.getValue("network", "STAssid", buffer, bufferLen)) {
+                    if (!CONFIG::isSSIDValid(buffer)) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_STA_SSID,buffer)) {
+                        success = false;
+                    }
+                }
+                //STApassword = mypassword
+                if (espconfig.getValue("network", "STApassword", buffer, bufferLen)) {
+                    if (!CONFIG::isPasswordValid(buffer)) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_STA_PASSWORD,buffer)) {
+                        success = false;
+                    }
+                }
+                //STAipmode = DHCP
+                if (espconfig.getValue("network", "STAipmode", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="dhcp") {
+                        bflag = DHCP_MODE;
+                    } else  if (stmp =="static") {
+                        bflag = STATIC_IP_MODE;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_STA_IP_MODE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //STAstatic_ip = 192.168.0.1
+                if (espconfig.getValue("network", "STAstatic_ip", buffer, bufferLen)) {
+                    if (!CONFIG::isIPValid(buffer)) {
+                        success = false;
+                    } else {
+                        CONFIG::split_ip(buffer,ip_sav);
+                        if(!CONFIG::write_buffer(EP_STA_IP_VALUE,ip_sav,IP_LENGTH)) {
+                            success = false;
+                        }
+                    }
+                }
+                //STAstatic_mask = 255.255.255.0
+                if (espconfig.getValue("network", "STAstatic_mask", buffer, bufferLen)) {
+                    if (!CONFIG::isIPValid(buffer)) {
+                        success = false;
+                    } else {
+                        CONFIG::split_ip(buffer,ip_sav);
+                        if(!CONFIG::write_buffer(EP_STA_MASK_VALUE,ip_sav,IP_LENGTH)) {
+                            success = false;
+                        }
+                    }
+                }
+                //STAstatic_gateway = 192.168.0.1
+                if (espconfig.getValue("network", "STAstatic_gateway", buffer, bufferLen)) {
+                    if (!CONFIG::isIPValid(buffer)) {
+                        success = false;
+                    } else {
+                        CONFIG::split_ip(buffer,ip_sav);
+                        if(!CONFIG::write_buffer(EP_STA_GATEWAY_VALUE,ip_sav,IP_LENGTH)) {
+                            success = false;
+                        }
+                    }
+                }
+                //STANetwork_mode = 11g
+                if (espconfig.getValue("network", "STANetwork_mode", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="11b") {
+                        bflag = WIFI_PHY_MODE_11B;
+                    } else  if (stmp =="11g") {
+                        bflag = WIFI_PHY_MODE_11G;
+                    } else  if (stmp =="11n") {
+                        bflag = WIFI_PHY_MODE_11N;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_STA_PHY_MODE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //APssid = NETGEAR_2GEXT_OFFICE2
+                if (espconfig.getValue("network", "APssid", buffer, bufferLen)) {
+                    if (!CONFIG::isSSIDValid(buffer)) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_AP_SSID,buffer)) {
+                        success = false;
+                    }
+                }
+                //APpassword = 12345678
+                if (espconfig.getValue("network", "APpassword", buffer, bufferLen)) {
+                    if (!CONFIG::isPasswordValid(buffer)) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_AP_PASSWORD,buffer)) {
+                        success = false;
+                    }
+                }
+                //APipmode = STATIC
+                if (espconfig.getValue("network", "APipmode", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="dhcp") {
+                        bflag = DHCP_MODE;
+                    } else  if (stmp =="static") {
+                        bflag = STATIC_IP_MODE;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_AP_IP_MODE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //APstatic_ip = 192.168.0.1
+                if (espconfig.getValue("network", "APstatic_ip", buffer, bufferLen)) {
+                    if (!CONFIG::isIPValid(buffer)) {
+                        success = false;
+                    } else {
+                        CONFIG::split_ip(buffer,ip_sav);
+                        if(!CONFIG::write_buffer(EP_AP_IP_VALUE,ip_sav,IP_LENGTH)) {
+                            success = false;
+                        }
+                    }
+                }
+                //APstatic_mask = 255.255.255.0
+                if (espconfig.getValue("network", "APstatic_mask", buffer, bufferLen)) {
+                    if (!CONFIG::isIPValid(buffer)) {
+                        success = false;
+                    } else {
+                        CONFIG::split_ip(buffer,ip_sav);
+                        if(!CONFIG::write_buffer(EP_AP_MASK_VALUE,ip_sav,IP_LENGTH)) {
+                            success = false;
+                        }
+                    }
+                }
+                //APstatic_gateway = 192.168.0.1
+                if (espconfig.getValue("network", "APstatic_gateway", buffer, bufferLen)) {
+                    if (!CONFIG::isIPValid(buffer)) {
+                        success = false;
+                    } else {
+                        CONFIG::split_ip(buffer,ip_sav);
+                        if(!CONFIG::write_buffer(EP_AP_GATEWAY_VALUE,ip_sav,IP_LENGTH)) {
+                            success = false;
+                        }
+                    }
+                }
+                //AP_channel = 1
+                if (espconfig.getValue("network", "AP_channel", buffer, bufferLen, itmp)) {
+                    bflag = itmp;
+                    if(!CONFIG::write_byte(EP_CHANNEL,bflag)) {
+                        success = false;
+                    }
+                }
+                //AP_visible = yes
+                if (espconfig.getValue("network", "AP_visible", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="yes") {
+                        bflag = 1;
+                    } else  if (stmp =="no") {
+                        bflag = 0;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_SSID_VISIBLE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //AP_auth = WPA
+                if (espconfig.getValue("network", "AP_auth", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="open") {
+                        bflag = AUTH_OPEN;
+                    } else  if (stmp =="wpa") {
+                        bflag = AUTH_WPA_PSK;
+                    } else  if (stmp =="wpa2") {
+                        bflag = AUTH_WPA2_PSK;
+                    } else  if (stmp =="wpa_wpa2") {
+                        bflag = AUTH_WPA_WPA2_PSK;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_AUTH_TYPE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //APNetwork_mode = 11g
+                if (espconfig.getValue("network", "APNetwork_mode", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="11b") {
+                        bflag = WIFI_PHY_MODE_11B;
+                    } else  if (stmp =="11g") {
+                        bflag = WIFI_PHY_MODE_11G;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_AP_PHY_MODE,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                
+                //Timezone
+                if (espconfig.getValue("network", "time_zone", buffer, bufferLen, itmp)) {
+                    bflag = itmp;
+                    if(!CONFIG::write_byte(EP_TIMEZONE,bflag)) {
+                        success = false;
+                    }
+                }
+                
+                //day saving time
+                if (espconfig.getValue("network", "day_st", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="yes") {
+                        bflag = 1;
+                    } else  if (stmp =="no") {
+                        bflag = 0;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_TIME_ISDST,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                //time server 1
+                if (espconfig.getValue("network", "time_server_1", buffer, bufferLen)) {
+                    if (strlen(buffer) > 128) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_TIME_SERVER1,buffer)) {
+                        success = false;
+                    }
+                }
+                
+                //time server 2
+                if (espconfig.getValue("network", "time_server_2", buffer, bufferLen)) {
+                    if (strlen(buffer) > 128) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_TIME_SERVER2,buffer)) {
+                        success = false;
+                    }
+                }
+                
+                //time server 3
+                if (espconfig.getValue("network", "time_server_3", buffer, bufferLen)) {
+                    if (strlen(buffer) > 128) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_TIME_SERVER3,buffer)) {
+                        success = false;
+                    }
+                }
+                
+                //Section [printer]
+                //data = 192.168.1.1/video.cgi?user=luc&pwd=mypassword
+                if (espconfig.getValue("printer", "data", buffer, bufferLen)) {
+                    if (strlen(buffer) > 128) {
+                        success = false;
+                    } else if(!CONFIG::write_string(EP_DATA_STRING,buffer)) {
+                        success = false;
+                    }
+                }
+                //refreshrate = 3
+                if (espconfig.getValue("printer", "refreshrate", buffer, bufferLen, itmp)) {
+                    bflag = itmp;
+                    if(!CONFIG::write_byte(EP_REFRESH_PAGE_TIME,bflag)) {
+                        success = false;
+                    }
+                }
+                 //refreshrate2 = 3
+                if (espconfig.getValue("printer", "refreshrate2", buffer, bufferLen, itmp)) {
+                    bflag = itmp;
+                    if(!CONFIG::write_byte(EP_REFRESH_PAGE_TIME2,bflag)) {
+                        success = false;
+                    }
+                }
+                //XY_feedrate = 1000
+                if (espconfig.getValue("printer", "XY_feedrate", buffer, bufferLen, itmp)) {
+                    if(!CONFIG::write_buffer(EP_XY_FEEDRATE,(const byte *)&itmp,INTEGER_LENGTH)) {
+                        success = false;
+                    }
+                }
+                //Z_feedrate = 100
+                if (espconfig.getValue("printer", "Z_feedrate", buffer, bufferLen, itmp)) {
+                    if(!CONFIG::write_buffer(EP_Z_FEEDRATE,(const byte *)&itmp,INTEGER_LENGTH)) {
+                        success = false;
+                    }
+                }
+                //E_feedrate = 400
+                if (espconfig.getValue("printer", "E_feedrate", buffer, bufferLen, itmp)) {
+                    if(!CONFIG::write_buffer(EP_E_FEEDRATE,(const byte *)&itmp,INTEGER_LENGTH)) {
+                        success = false;
+                    }
+                }
+                
+                 //target_printer= smoothieware
+                if (espconfig.getValue("printer", "target_printer", buffer, bufferLen)) {
+                    stmp = buffer;
+                    bflag = UNKNOWN_FW;
+                    if ( stmp.equalsIgnoreCase(String(F("repetier"))))bflag = REPETIER;
+                    else  if ( stmp.equalsIgnoreCase(String(F("repetier4davinci"))))bflag = REPETIER4DV;
+                    else  if ( stmp.equalsIgnoreCase(String(F("marlin"))))bflag = MARLIN;
+                    else  if ( stmp.equalsIgnoreCase(String(F("marlinkimbra"))))bflag = MARLINKIMBRA;
+                    else  if ( stmp.equalsIgnoreCase(String(F("smoothieware"))))bflag = SMOOTHIEWARE;
+                    else  success = false;
+                    if(!(success && CONFIG::write_byte(EP_TARGET_FW,bflag))) {
+                        success = false;
+                    }
+                }
+                
+                //direct sd connection
+                if (espconfig.getValue("printer", "direct_sd", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="yes") {
+                        bflag = 1;
+                    } else  if (stmp =="no") {
+                        bflag = 0;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_IS_DIRECT_SD,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                 //sd check update at boot
+                if (espconfig.getValue("printer", "sd_check_update", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="yes") {
+                        bflag = 1;
+                    } else  if (stmp =="no") {
+                        bflag = 0;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_SD_CHECK_UPDATE_AT_BOOT,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                 //direct sd boot check
+                if (espconfig.getValue("printer", "direct_sd_boot_check", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="yes") {
+                        bflag = 1;
+                    } else  if (stmp =="no") {
+                        bflag = 0;
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_DIRECT_SD_CHECK,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+                
+                //primary sd directory
+                if (espconfig.getValue("printer", "primary_sd ", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="none") {
+                        bflag = 0;
+                    } else  if (stmp =="sd") {
+                        bflag = 1;
+                    } else  if (stmp =="ext") {
+                        bflag = 2;                        
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_PRIMARY_SD,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+            
+                 //secondary sd directory
+                if (espconfig.getValue("printer", "secondary_sd  ", buffer, bufferLen)) {
+                    stmp = buffer;
+                    localerror = false;
+                    stmp.toLowerCase();
+                    bflag = 0;
+                    if (stmp =="none") {
+                        bflag = 0;
+                    } else  if (stmp =="sd") {
+                        bflag = 1;
+                    } else  if (stmp =="ext") {
+                        bflag = 2;                      
+                    } else {
+                        localerror = true;
+                        success = false;
+                    }
+                    if (!localerror) {
+                        if(!CONFIG::write_byte(EP_SECONDARY_SD,bflag)) {
+                            success = false;
+                        }
+                    }
+                }
+            
+            }
+            espconfig.close();
+            if(success) {
+                newfilename.replace(String(".txt"), String(".ok"));
+            } else {
+                newfilename.replace(String(".txt"), String(".bad"));
+                answer = false;
+            }
+            //rename if name is already used
+            if (!CONFIG::renameFile (newfilename)) {
+                LOG("Failed to rename previous file\r\n")
+            }
+            if (SD.rename((const char *)filename.c_str(),(const char *)newfilename.c_str())) {
+                LOG("File renamed, restarted file\r\n")
+            } else {
+                 return false;
+                LOG("Failed to rename file\r\n")
+            }
+            } else {
+                 return false;
+                LOG("Failed to open config file\r\n")
+            }
+        } else {
+            return false;
+            LOG("No config file\r\n")
+        }
+    return answer;
+}
+#endif
 void CONFIG::esp_restart()
 {
     LOG("Restarting\r\n")
-    Serial.flush();
+    ESP_SERIAL_OUT.flush();
     delay(500);
-    Serial.swap();
+#ifdef ARDUINO_ARCH_ESP8266
+    ESP_SERIAL_OUT.swap();
+#endif
     delay(100);
     ESP.restart();
     while (1) {
@@ -235,7 +850,7 @@ char * CONFIG::intTostr(int value)
     return result;
 }
 
-String CONFIG::formatBytes(size_t bytes)
+String CONFIG::formatBytes(uint32_t bytes)
 {
     if (bytes < 1024) {
         return String(bytes)+" B";
@@ -395,10 +1010,12 @@ bool CONFIG::check_update_presence( ){
      if (CONFIG::is_direct_sd) { 
          long baud_rate=0;
          if (!CONFIG::read_buffer(EP_BAUD_RATE,  (byte *)&baud_rate, INTEGER_LENGTH)) return false;
-         Serial.begin(baud_rate);
+         if (ESP_SERIAL_OUT.baudRate() != baud_rate)ESP_SERIAL_OUT.begin(baud_rate);
          CONFIG::InitFirmwareTarget();
+         delay(500);
          String cmd = "M20";
-         if (CONFIG::FirmwareTarget == UNKNOWN_FW) return false;
+         //By default M20 should be applied
+         //if (CONFIG::FirmwareTarget == UNKNOWN_FW) return false;
          if (CONFIG::FirmwareTarget == SMOOTHIEWARE) {
              byte sd_dir = 0;
              if (!CONFIG::read_byte(EP_PRIMARY_SD, &sd_dir )) sd_dir = DEFAULT_PRIMARY_SD;
@@ -407,18 +1024,17 @@ bool CONFIG::check_update_presence( ){
              else return false;
          }
         String tmp;
-        
         int count ;
         //send command to serial as no need to transfer ESP command
         //to avoid any pollution if Uploading file to SDCard
         //block every query
         //empty the serial buffer and incoming data
-        if(Serial.available()) {
+        if(ESP_SERIAL_OUT.available()) {
             BRIDGE::processFromSerial2TCP();
             delay(1);
         }
         //Send command
-        Serial.println(cmd);
+        ESP_SERIAL_OUT.println(cmd);
         count = 0;
         String current_buffer;
         String current_line;
@@ -428,12 +1044,12 @@ bool CONFIG::check_update_presence( ){
         //pickup the list
         while (count < MAX_TRY) {
             //give some time between each buffer
-            if (Serial.available()) {
+            if (ESP_SERIAL_OUT.available()) {
                 count = 0;
-                size_t len = Serial.available();
+                size_t len = ESP_SERIAL_OUT.available();
                 uint8_t sbuf[len+1];
                 //read buffer
-                Serial.readBytes(sbuf, len);
+                ESP_SERIAL_OUT.readBytes(sbuf, len);
                 //change buffer as string
                 sbuf[len]='\0';
                 //add buffer to current one if any
@@ -454,6 +1070,7 @@ bool CONFIG::check_update_presence( ){
                     if (current_line.indexOf("busy:") > -1 || current_line.indexOf("T:") > -1 || current_line.indexOf("B:") > -1) {
                         temp_counter++;
                     } else {
+                    
                     }
                     if (temp_counter > 5) {
                         break;
@@ -473,7 +1090,7 @@ bool CONFIG::check_update_presence( ){
             }
             count++;
         }
-        if(Serial.available()) {
+        if(ESP_SERIAL_OUT.available()) {
             BRIDGE::processFromSerial2TCP();
             delay(1);
         }
@@ -688,6 +1305,10 @@ bool CONFIG::reset_config()
      if(!CONFIG::write_byte(EP_DIRECT_SD_CHECK, DEFAULT_DIRECT_SD_CHECK)) {
         return false;
     }
+    
+    if(!CONFIG::write_byte(EP_SD_CHECK_UPDATE_AT_BOOT, DEFAULT_SD_CHECK_UPDATE_AT_BOOT)) {
+        return false;
+    }
 
     if(!CONFIG::write_string(EP_TIME_SERVER1,FPSTR(DEFAULT_TIME_SERVER1))) {
         return false;
@@ -707,17 +1328,28 @@ void CONFIG::print_config(tpipe output, bool plaintext)
 {    
     if (!plaintext)BRIDGE::print(F("{\"chip_id\":\""), output);
     else BRIDGE::print(F("Chip ID: "), output);
+#ifdef ARDUINO_ARCH_ESP8266
     BRIDGE::print(String(ESP.getChipId()).c_str(), output);
+#else
+	BRIDGE::print(String((uint16_t)(ESP.getEfuseMac()>>32)).c_str(), output);
+#endif
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
     
     if (!plaintext)BRIDGE::print(F("\"cpu\":\""), output);
     else BRIDGE::print(F("CPU Frequency: "), output);
     BRIDGE::print(String(ESP.getCpuFreqMHz()).c_str(), output);
-    BRIDGE::print(F("Mhz"), output);
+    if (plaintext)BRIDGE::print(F("Mhz"), output);
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
-    
+#ifdef ARDUINO_ARCH_ESP32 
+    if (!plaintext)BRIDGE::print(F("\"cpu_temp\":\""), output);
+    else BRIDGE::print(F("CPU Temperature: "), output);
+    BRIDGE::print(String(temperatureRead(),1).c_str(), output);
+    if (plaintext)BRIDGE::print(F("C"), output);
+    if (!plaintext)BRIDGE::print(F("\","), output);
+    else BRIDGE::print(F("\n"), output);
+#endif  
     if (!plaintext)BRIDGE::print(F("\"freemem\":\""), output);
     else BRIDGE::print(F("Free memory: "), output);
     BRIDGE::print(formatBytes(ESP.getFreeHeap()).c_str(), output);
@@ -737,7 +1369,7 @@ void CONFIG::print_config(tpipe output, bool plaintext)
     BRIDGE::print(formatBytes(ESP.getFlashChipSize()).c_str(), output);
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
-    
+#ifdef ARDUINO_ARCH_ESP8266    
     if (!plaintext)BRIDGE::print(F("\"update_size\":\""), output);
     else BRIDGE::print(F("Available Size for update: "), output);
     uint32_t  flashsize = ESP.getFlashChipSize();
@@ -748,31 +1380,61 @@ void CONFIG::print_config(tpipe output, bool plaintext)
         if ((flashsize - ESP.getSketchSize()) > (flashsize / 2)) BRIDGE::println(F("(Ok)"), output);
         else BRIDGE::print(F("(Not enough)"), output);
         }
-    
+
     if (!plaintext)BRIDGE::print(F("\"spiffs_size\":\""), output);
     else BRIDGE::print(F("Available Size for SPIFFS: "), output);
-    if (ESP.getFlashChipRealSize() > 1024 * 1024) {
-        BRIDGE::print(formatBytes(ESP.getFlashChipRealSize()-(1024 * 1024)).c_str(), output);
-        }
-    else {
-        BRIDGE::print(formatBytes(ESP.getFlashChipSize() - (ESP.getSketchSize()*2)).c_str(), output);
-    }
+    fs::FSInfo info;
+    SPIFFS.info(info);
+    BRIDGE::print(formatBytes(info.totalBytes).c_str(), output);
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
-    
+#else 
+	if (!plaintext)BRIDGE::print(F("\"update_size\":\""), output);
+    else BRIDGE::print(F("Available Size for update: "), output);
+    uint32_t  flashsize = ESP.getFlashChipSize();
+//Not OTA on 2Mb board per spec
+    if (flashsize > 0x20000) flashsize = 0x140000;
+    else flashsize = 0x0;
+    BRIDGE::print(formatBytes(flashsize).c_str(), output);
+    if (!plaintext)BRIDGE::print(F("\","), output);
+    else {
+        if (flashsize  > 0x0) BRIDGE::println(F("(Ok)"), output);
+        else BRIDGE::print(F("(Not enough)"), output);
+        }
+    if (!plaintext)BRIDGE::print(F("\"spiffs_size\":\""), output);
+    else BRIDGE::print(F("Available Size for SPIFFS: "), output);
+    BRIDGE::print(formatBytes(SPIFFS.totalBytes()).c_str(), output);
+    if (!plaintext)BRIDGE::print(F("\","), output);
+    else BRIDGE::print(F("\n"), output);
+#endif
     if (!plaintext)BRIDGE::print(F("\"baud_rate\":\""), output);
     else BRIDGE::print(F("Baud rate: "), output);
-    BRIDGE::print(String(Serial.baudRate()).c_str(), output);
+    uint32_t br = ESP_SERIAL_OUT.baudRate();
+#ifdef ARDUINO_ARCH_ESP32
+    //workaround for ESP32
+    if(br == 115201)br = 115200;
+    if(br == 230423)br = 230400;
+#endif
+    BRIDGE::print(String(br).c_str(), output);
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
 
     if (!plaintext)BRIDGE::print(F("\"sleep_mode\":\""), output);
     else BRIDGE::print(F("Sleep mode: "), output);
-    if (WiFi.getSleepMode() == WIFI_NONE_SLEEP) {
+#ifdef ARDUINO_ARCH_ESP32
+    wifi_ps_type_t ps_type;
+    esp_wifi_get_ps(&ps_type);
+#else
+    WiFiSleepType_t ps_type;
+    ps_type = WiFi.getSleepMode();
+#endif
+    if (ps_type == WIFI_NONE_SLEEP) {
         BRIDGE::print(F("None"), output);
-    } else if (WiFi.getSleepMode() == WIFI_LIGHT_SLEEP) {
+#ifdef ARDUINO_ARCH_ESP8266
+    } else if (ps_type == WIFI_LIGHT_SLEEP) {
         BRIDGE::print(F("Light"), output);
-    } else if (WiFi.getSleepMode() == WIFI_MODEM_SLEEP) {
+#endif
+    } else if (ps_type == WIFI_MODEM_SLEEP) {
         BRIDGE::print(F("Modem"), output);
     } else {
         BRIDGE::print(F("???"), output);
@@ -785,12 +1447,18 @@ void CONFIG::print_config(tpipe output, bool plaintext)
     BRIDGE::print(String(WiFi.channel()).c_str(), output);
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
-    
+#ifdef ARDUINO_ARCH_ESP32
+    uint8_t PhyMode;
+    if (WiFi.getMode() == WIFI_STA)esp_wifi_get_protocol(ESP_IF_WIFI_STA, &PhyMode);
+    else esp_wifi_get_protocol(ESP_IF_WIFI_AP, &PhyMode);
+#else   
+    WiFiPhyMode_t PhyMode = WiFi.getPhyMode();
+#endif
     if (!plaintext)BRIDGE::print(F("\"phy_mode\":\""), output);
     else BRIDGE::print(F("Phy Mode: "), output);
-    if (WiFi.getPhyMode() == WIFI_PHY_MODE_11G )BRIDGE::print(F("11g"), output);
-    else if (WiFi.getPhyMode() == WIFI_PHY_MODE_11B )BRIDGE::print(F("11b"), output);
-    else if (WiFi.getPhyMode() == WIFI_PHY_MODE_11N )BRIDGE::print(F("11n"), output);
+    if (PhyMode == WIFI_PHY_MODE_11G )BRIDGE::print(F("11g"), output);
+    else if (PhyMode == WIFI_PHY_MODE_11B )BRIDGE::print(F("11b"), output);
+    else if (PhyMode == WIFI_PHY_MODE_11N )BRIDGE::print(F("11n"), output);
     else BRIDGE::print(F("???"), output);
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
@@ -803,7 +1471,7 @@ void CONFIG::print_config(tpipe output, bool plaintext)
     
     if (!plaintext)BRIDGE::print(F("\"data_port\":\""), output);
     else BRIDGE::print(F("Data port: "), output);
-    #ifdef TCP_IP_DATA_FEATURE
+#ifdef TCP_IP_DATA_FEATURE
     BRIDGE::print(String(wifi_config.idata_port).c_str(), output);
 #else
     BRIDGE::print(F("Disabled"), output);
@@ -814,7 +1482,11 @@ void CONFIG::print_config(tpipe output, bool plaintext)
     if (WiFi.getMode() == WIFI_STA || WiFi.getMode() == WIFI_AP_STA) {
         if (!plaintext)BRIDGE::print(F("\"hostname\":\""), output);
         else BRIDGE::print(F("Hostname: "), output);
+#ifdef ARDUINO_ARCH_ESP32
+        BRIDGE::print(WiFi.getHostname(), output);
+#else
         BRIDGE::print(WiFi.hostname().c_str(), output);
+#endif
         if (!plaintext)BRIDGE::print(F("\","), output);
         else BRIDGE::print(F("\n"), output);
     }
@@ -860,7 +1532,16 @@ void CONFIG::print_config(tpipe output, bool plaintext)
         }
          if (!plaintext)BRIDGE::print(F("\"ip_mode\":\""), output);
         else BRIDGE::print(F("IP Mode: "), output);
-        if (wifi_station_dhcpc_status()==DHCP_STARTED) BRIDGE::print(F("DHCP"), output);
+#ifdef ARDUINO_ARCH_ESP32
+        tcpip_adapter_dhcp_status_t dhcp_status;
+        tcpip_adapter_dhcpc_get_status(TCPIP_ADAPTER_IF_STA, &dhcp_status);
+        if (dhcp_status == TCPIP_ADAPTER_DHCP_STARTED)
+#else
+        if (wifi_station_dhcpc_status()==DHCP_STARTED) 
+#endif
+        {
+			BRIDGE::print(F("DHCP"), output);
+		}
         else BRIDGE::print(F("Static"), output);
          if (!plaintext)BRIDGE::print(F("\","), output);
         else BRIDGE::print(F("\n"), output);
@@ -905,11 +1586,24 @@ void CONFIG::print_config(tpipe output, bool plaintext)
         else BRIDGE::print(F("\n"), output);
         
         //get current config
+#ifdef ARDUINO_ARCH_ESP32
+        wifi_ap_config_t apconfig;
+        wifi_config_t conf;
+        esp_wifi_get_config(ESP_IF_WIFI_AP, &conf);
+        apconfig.ssid_hidden = conf.ap.ssid_hidden;
+        apconfig.authmode = conf.ap.authmode;
+        apconfig.max_connection = conf.ap.max_connection;
+#else
         struct softap_config apconfig;
         wifi_softap_get_config(&apconfig);
+#endif
         if (!plaintext)BRIDGE::print(F("\"ap_ssid\":\""), output);
         else BRIDGE::print(F("SSID: "), output);
-        BRIDGE::print((const char*)apconfig.ssid, output);
+#ifdef ARDUINO_ARCH_ESP32
+        BRIDGE::print((const char*)conf.ap.ssid, output);
+#else
+		BRIDGE::print((const char*)apconfig.ssid, output);
+#endif
         if (!plaintext)BRIDGE::print(F("\","), output);
         else BRIDGE::print(F("\n"), output);
         
@@ -943,7 +1637,16 @@ void CONFIG::print_config(tpipe output, bool plaintext)
         
         if (!plaintext)BRIDGE::print(F("\"ssid_dhcp\":\""), output);
         else BRIDGE::print(F("DHCP Server: "), output);
-        if(wifi_softap_dhcps_status() == DHCP_STARTED) BRIDGE::print(F("Started"), output);
+#ifdef ARDUINO_ARCH_ESP32
+        tcpip_adapter_dhcp_status_t dhcp_status;
+        tcpip_adapter_dhcps_get_status(TCPIP_ADAPTER_IF_AP, &dhcp_status);
+        if (dhcp_status == TCPIP_ADAPTER_DHCP_STARTED)
+#else
+        if(wifi_softap_dhcps_status() == DHCP_STARTED) 
+#endif
+        {
+			BRIDGE::print(F("Started"), output);
+		}
         else BRIDGE::print(F("Stopped"), output);
         if (!plaintext)BRIDGE::print(F("\","), output);
         else BRIDGE::print(F("\n"), output);
@@ -953,9 +1656,13 @@ void CONFIG::print_config(tpipe output, bool plaintext)
         BRIDGE::print(WiFi.softAPIP().toString().c_str(), output);
         if (!plaintext)BRIDGE::print(F("\","), output);
         else BRIDGE::print(F("\n"), output);
-        
+#ifdef ARDUINO_ARCH_ESP32      
+        tcpip_adapter_ip_info_t ip;
+        tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ip);
+#else    
         struct ip_info ip;
         wifi_get_ip_info(SOFTAP_IF, &ip);
+#endif
         if (!plaintext)BRIDGE::print(F("\"gw\":\""), output);
         else BRIDGE::print(F("Gateway: "), output);
         BRIDGE::print(IPAddress(ip.gw.addr).toString().c_str(), output);
@@ -972,10 +1679,21 @@ void CONFIG::print_config(tpipe output, bool plaintext)
         if (!plaintext)BRIDGE::print(F("\"connected_clients\":["), output);
         else BRIDGE::print(F("Connected clients: "), output);
         int client_counter=0;
+#ifdef ARDUINO_ARCH_ESP32     
+        wifi_sta_list_t station;
+        tcpip_adapter_sta_list_t tcpip_sta_list;
+        esp_wifi_ap_get_sta_list(&station);
+        tcpip_adapter_get_sta_list(&station, &tcpip_sta_list);
+#else       
         struct station_info * station;
         station = wifi_softap_get_station_info();
+#endif
         String stmp ="";
+#ifdef ARDUINO_ARCH_ESP32
+		for (int i=0; i < station.num; i++){
+#else
         while(station) {
+#endif
             if(stmp.length() > 0) {
                 if (!plaintext)stmp+=F(",");
                 else stmp+=F("\n");
@@ -983,18 +1701,30 @@ void CONFIG::print_config(tpipe output, bool plaintext)
             }
             if (!plaintext)stmp+=F("{\"bssid\":\"");
             //BSSID
-            stmp += CONFIG::mac2str(station->bssid);
+#ifdef ARDUINO_ARCH_ESP32
+            stmp += CONFIG::mac2str(tcpip_sta_list.sta[i].mac);
+#else
+			stmp += CONFIG::mac2str(station->bssid);
+#endif
             if (!plaintext)stmp+=F("\",\"ip\":\"");
             else stmp += F(" ");
             //IP
-            stmp += IPAddress((const uint8_t *)&station->ip).toString().c_str();
+#ifdef ARDUINO_ARCH_ESP32
+            stmp += IPAddress(tcpip_sta_list.sta[i].ip.addr).toString().c_str();
+#else
+			stmp += IPAddress((const uint8_t *)&station->ip).toString().c_str();
+#endif
             if (!plaintext)stmp+=F("\"}");
             //increment counter
             client_counter++;
+#ifdef ARDUINO_ARCH_ESP32
+		}
+#else
             //go next record
             station = station->next;
         }
         wifi_softap_free_station_info();
+#endif
         if (!plaintext) {
             BRIDGE::print(stmp.c_str(), output);
             BRIDGE::print(F("],"), output);
@@ -1109,7 +1839,6 @@ void CONFIG::print_config(tpipe output, bool plaintext)
     BRIDGE::print(CONFIG::GetFirmwareTargetName(), output);
     if (!plaintext)BRIDGE::print(F("\","), output);
     else BRIDGE::print(F("\n"), output);
-
 #ifdef DEBUG_ESP3D
     if (!plaintext)BRIDGE::print(F("\"debug\":\""), output);
     else BRIDGE::print(F("Debug: "), output);

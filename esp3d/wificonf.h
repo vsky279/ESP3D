@@ -1,5 +1,5 @@
 /*
-  wifi.h - ESP3D configuration class
+  wificonf.h - ESP3D configuration class
 
   Copyright (c) 2014 Luc Lebosse. All rights reserved.
 
@@ -18,15 +18,21 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-#ifndef WIFI_h
-#define WIFI_h
+#ifndef WIFICONF_H
+#define WIFICONF_H
 #include <Arduino.h>
 #include "config.h"
 #include "IPAddress.h"
-#include <ESP8266WiFi.h>
-
+#ifdef ARDUINO_ARCH_ESP8266
+#include "ESP8266WiFi.h"
 #ifdef MDNS_FEATURE
 #include <ESP8266mDNS.h>
+#endif
+#else
+#include <WiFi.h>
+#ifdef MDNS_FEATURE
+#include <ESPmDNS.h>
+#endif
 #endif
 
 class WIFI_CONFIG

@@ -28,10 +28,15 @@
 #define INI_FILE_MAX_FILENAME_LEN 26
 
 //to match ESP needs
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266WiFi.h>
 #include "SdFat.h"
 extern SdFat SD;
-//#include "SD.h"
+#else
+#include <WiFi.h>
+#include "FS.h"
+#include "SD.h"
+#endif
 //#include "Ethernet.h"
 
 class IniFileState;
@@ -53,7 +58,11 @@ public:
   static const uint8_t maxFilenameLen;
 
   // Create an IniFile object. It isn't opened until open() is called on it.
+#ifdef ARDUINO_ARCH_ESP8266
   IniFile(const char* filename, uint8_t mode = FILE_READ,
+#else
+  IniFile(const char* filename, const char* mode = FILE_READ,
+#endif
 	  bool caseSensitive = false);
   ~IniFile();
 
@@ -65,7 +74,11 @@ public:
   inline error_t getError(void) const;
   inline void clearError(void) const;
   // Get the file mode (FILE_READ/FILE_WRITE)
+#ifdef ARDUINO_ARCH_ESP8266
   inline uint8_t getMode(void) const;
+#else
+  inline const char * getMode(void) const;
+#endif
 
   // Get the filename asscoiated with the ini file object
   inline const char* getFilename(void) const;
@@ -142,7 +155,11 @@ public:
 
 private:
   char _filename[INI_FILE_MAX_FILENAME_LEN];
+#ifdef ARDUINO_ARCH_ESP8266
   uint8_t _mode;
+#else
+  char _mode[2];
+#endif
   mutable error_t _error;
   mutable File _file;
   bool _caseSensitive;
@@ -183,11 +200,17 @@ void IniFile::clearError(void) const
 {
   _error = errorNoError;
 }
-
+#ifdef ARDUINO_ARCH_ESP8266
 uint8_t IniFile::getMode(void) const
 {
   return _mode;
 }
+#else
+const char * IniFile::getMode(void) const
+{
+  return _mode;
+}
+#endif
 
 const char* IniFile::getFilename(void) const
 {

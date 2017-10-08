@@ -23,11 +23,17 @@
 #include <Arduino.h>
 #include <WiFiClient.h>
 #include <WiFiServer.h>
-#include <ESP8266WebServer.h>
 #ifndef FS_NO_GLOBALS
 #define FS_NO_GLOBALS
 #endif
 #include <FS.h>
+#ifdef ARDUINO_ARCH_ESP8266
+#include <ESP8266WebServer.h>
+#else
+#include <WebServer.h>
+#endif
+
+
 #include "storestrings.h"
 
 #define MAX_EXTRUDERS 4
@@ -46,8 +52,12 @@ class WEBINTERFACE_CLASS
 public:
     WEBINTERFACE_CLASS (int port = 80);
     ~WEBINTERFACE_CLASS();
-    ESP8266WebServer WebServer;
-     fs::File fsUploadFile;
+#ifdef ARDUINO_ARCH_ESP8266
+    ESP8266WebServer web_server;
+#else
+	WebServer web_server;
+#endif
+     FS_FILE fsUploadFile;
 #ifdef ERROR_MSG_FEATURE
     STORESTRINGS_CLASS error_msg;
 #endif

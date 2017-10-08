@@ -23,15 +23,22 @@
 #include <string.h>
 
 const uint8_t IniFile::maxFilenameLen = INI_FILE_MAX_FILENAME_LEN;
-
+#ifdef ARDUINO_ARCH_ESP8266
 IniFile::IniFile(const char* filename, uint8_t mode,
+#else
+IniFile::IniFile(const char* filename, const char* mode,
+#endif
 		 bool caseSensitive)
 {
   if (strlen(filename) <= maxFilenameLen)
     strcpy(_filename, filename);
   else
     _filename[0] = '\0';
+#ifdef ARDUINO_ARCH_ESP8266
   _mode = mode;
+#else
+  strcpy(_mode, mode);
+#endif
   _caseSensitive = caseSensitive;
 }
 
@@ -341,8 +348,11 @@ IniFile::error_t IniFile::readLine(File &file, char *buffer, size_t len, uint32_
 
   if (!file.seek(pos))
     return errorSeekError;
-
+#ifdef ARDUINO_ARCH_ESP8266
   size_t bytesRead = file.read(buffer, len);
+#else
+  size_t bytesRead = file.read((uint8_t *)buffer, len);
+#endif
   if (!bytesRead) {
     buffer[0] = '\0';
     //return 1; // done

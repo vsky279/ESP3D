@@ -18,6 +18,7 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
+#include "config.h"
 #include "bridge.h"
 #include "command.h"
 #include "webinterface.h"
@@ -43,11 +44,7 @@ void BRIDGE::print (const char * data, tpipe output)
     switch(output) {
     case SERIAL_PIPE:
         header_sent = false;
-        Serial.print(data);
-        break;
-    case SERIAL1_PIPE:
-        header_sent = false;
-        Serial1.print(data);
+        ESP_SERIAL_OUT.print(data);
         break;
 #ifdef TCP_IP_DATA_FEATURE
     case TCP_PIPE:
@@ -57,16 +54,16 @@ void BRIDGE::print (const char * data, tpipe output)
 #endif
     case WEB_PIPE:
         if (!header_sent) {
-            web_interface->WebServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
-            web_interface->WebServer.sendHeader("Content-Type","text/html");
-            web_interface->WebServer.sendHeader("Cache-Control","no-cache");
-            web_interface->WebServer.send(200);
+            web_interface->web_server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+            web_interface->web_server.sendHeader("Content-Type","text/html");
+            web_interface->web_server.sendHeader("Cache-Control","no-cache");
+            web_interface->web_server.send(200);
             header_sent = true;
         }
         buffer_web+=data;
         if (buffer_web.length() > 1200) {
             //send data
-            web_interface->WebServer.sendContent(buffer_web);
+            web_interface->web_server.sendContent(buffer_web);
             //reset buffer
             buffer_web="";
         }
@@ -103,10 +100,7 @@ void BRIDGE::flush (tpipe output)
 {
     switch(output) {
     case SERIAL_PIPE:
-        Serial.flush();
-        break;
-    case SERIAL1_PIPE:
-        Serial1.flush();
+        ESP_SERIAL_OUT.flush();
         break;
 #ifdef TCP_IP_DATA_FEATURE
     case TCP_PIPE:
@@ -115,9 +109,9 @@ void BRIDGE::flush (tpipe output)
     case WEB_PIPE:
         if(header_sent) {
             //send data
-            web_interface->WebServer.sendContent(buffer_web);
+            web_interface->web_server.sendContent(buffer_web);
             //close line
-            web_interface->WebServer.sendContent("");
+            web_interface->web_server.sendContent("");
         }
         break;
     default:
@@ -153,10 +147,10 @@ bool BRIDGE::processFromSerial2TCP()
 {
     uint8_t i;
     //check UART for data
-    if(Serial.available()) {
-        size_t len = Serial.available();
+    if(ESP_SERIAL_OUT.available()) {
+        size_t len = ESP_SERIAL_OUT.available();
         uint8_t sbuf[len];
-        Serial.readBytes(sbuf, len);
+        ESP_SERIAL_OUT.readBytes(sbuf, len);
 #ifdef TCP_IP_DATA_FEATURE
           if (WiFi.getMode()!=WIFI_OFF ) {
             //push UART data to all connected tcp clients
@@ -204,7 +198,7 @@ void BRIDGE::processFromTCP2Serial()
                     //get data from the tcp client and push it to the UART
                     while(serverClients[i].available()) {
                         data = serverClients[i].read();
-                        Serial.write(data);
+                        ESP_SERIAL_OUT.write(data);
                         COMMAND::read_buffer_tcp(data);
                     }
                 }

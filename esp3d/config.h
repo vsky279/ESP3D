@@ -26,6 +26,39 @@
 #define SMOOTHIEWARE	4
 #define REPETIER		5
 
+#ifdef ARDUINO_ARCH_ESP32
+#include "FS.h"
+#include "SPIFFS.h"
+#define WIFI_NONE_SLEEP WIFI_PS_NONE
+#define WIFI_MODEM_SLEEP WIFI_PS_MODEM
+#define WIFI_PHY_MODE_11B WIFI_PROTOCOL_11B
+#define WIFI_PHY_MODE_11G WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G
+#define WIFI_PHY_MODE_11N WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N
+#define AUTH_OPEN WIFI_AUTH_OPEN
+#define AUTH_WEP WIFI_AUTH_WEP
+#define AUTH_WPA_PSK WIFI_AUTH_WPA_PSK
+#define AUTH_WPA2_PSK WIFI_AUTH_WPA2_PSK
+#define AUTH_WPA_WPA2_PSK WIFI_AUTH_WPA_WPA2_PSK
+#define ENC_TYPE_NONE AUTH_OPEN
+#define FS_FILE File
+#define FS_DIR File
+#define ESP_SERIAL_OUT Serial
+#define SD_FILE_READ FILE_READ
+#define SPIFFS_FILE_READ FILE_READ
+#define SD_FILE_WRITE FILE_WRITE
+#define SPIFFS_FILE_WRITE FILE_WRITE
+
+extern HardwareSerial Serial2;
+#else
+#define FS_DIR fs::Dir
+#define FS_FILE fs::File
+#define ESP_SERIAL_OUT Serial
+#define SD_FILE_READ FILE_READ
+#define SPIFFS_FILE_READ "r"
+#define SD_FILE_WRITE FILE_WRITE
+#define SPIFFS_FILE_WRITE "w"
+#endif
+
 #define MAX_FW_ID REPETIER
 
 //number of clients allowed to use data port at once
@@ -41,6 +74,15 @@
 
 //NETBIOS_FEATURE: this feature is a discovery protocol, supported on Windows out of the box
 #define NETBIOS_FEATURE
+
+#ifdef ARDUINO_ARCH_ESP32
+#ifdef SSDP_FEATURE
+#undef SSDP_FEATURE
+#endif
+#ifdef NETBIOS_FEATURE
+#undef NETBIOS_FEATURE
+#endif
+#endif
 
 //CAPTIVE_PORTAL_FEATURE: In SoftAP redirect all unknow call to main page
 #define CAPTIVE_PORTAL_FEATURE
@@ -80,15 +122,20 @@
 //Serial rx buffer size is 256 but can be extended
 #define SERIAL_RX_BUFFER_SIZE 512
 
-#define ACCESSSD() {}
-#define RELEASESD() {}
+#ifdef ARDUINO_ARCH_ESP32
+#ifdef SSDP_FEATURE
+#undef SSDP_FEATURE
+#endif
+#ifdef NETBIOS_FEATURE
+#undef NETBIOS_FEATURE
+#endif
+#endif
 
 
 //DEBUG Flag do not do this when connected to printer !!!
 //be noted all upload may failed if enabled
 //#define DEBUG_ESP3D
 //#define DEBUG_OUTPUT_SPIFFS
-//#define DEBUG_OUTPUT_SD
 //#define DEBUG_OUTPUT_SERIAL
 //#define DEBUG_OUTPUT_TCP
 
@@ -100,7 +147,7 @@
 #define FS_NO_GLOBALS
 #endif
 #include <FS.h>
-#define DEBUG_ESP3D(string) { fs::File logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
+#define DEBUG_ESP3D(string) { FS_FILE logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
 */
 
 #ifdef DEBUG_ESP3D
@@ -110,16 +157,10 @@
 #endif
 #include <FS.h>
 #define DEBUG_PIPE NO_PIPE
-#define LOG(string) { fs::File logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
-#endif
-#ifdef DEBUG_OUTPUT_SD
-#define DEBUG_PIPE NO_PIPE
-#include "SdFat.h"
-extern SdFat SD;
-#define LOG(string) {if(CONFIG::hasSD()){ACCESSSD() File logfile = SD.open("/log.txt", "a+");logfile.print(string);logfile.close();RELEASESD()}}
+#define LOG(string) { FS_FILE logfile = SPIFFS.open("/log.txt", "a+");logfile.print(string);logfile.close();}
 #endif
 #ifdef DEBUG_OUTPUT_SERIAL
-#define LOG(string) {Serial.print(string);}
+#define LOG(string) {ESP_SERIAL_OUT.print(string);}
 #define DEBUG_PIPE SERIAL_PIPE
 #endif
 #ifdef DEBUG_OUTPUT_TCP
@@ -136,12 +177,16 @@ extern SdFat SD;
 #define CONFIG_h
 
 #include <Arduino.h>
+#ifdef ARDUINO_ARCH_ESP8266
 extern "C" {
 #include "user_interface.h"
 }
-#include "wifi.h"
+#else
+//Nothing here
+#endif
+#include "wificonf.h"
 //version and sources location
-#define FW_VERSION "0.9.851"
+#define FW_VERSION "0.9.99"
 #define REPOSITORY "https://github.com/luc-github/ESP3D"
 
 typedef enum {
@@ -161,7 +206,7 @@ typedef enum {
 } level_authenticate_type;
 
 
-#define  NO_SD 0
+#define    NO_SD 0
 #define    SD_DIRECTORY 1
 #define    EXT_DIRECTORY 2
 
@@ -215,10 +260,11 @@ typedef enum {
 #define EP_PRIMARY_SD   851//1  bytes = flag
 #define EP_SECONDARY_SD   852//1  bytes = flag
 #define EP_DIRECT_SD_CHECK   853//1  bytes = flag
+#define EP_SD_CHECK_UPDATE_AT_BOOT   854//1  bytes = flag
 
-#define LAST_EEPROM_ADDRESS 854
-//next available is 854
-//space left 1024 - 854 = 170
+#define LAST_EEPROM_ADDRESS 855
+//next available is 855
+//space left 1024 - 855 = 169
 
 //default values
 #define DEFAULT_WIFI_MODE			AP_MODE
@@ -258,8 +304,11 @@ const char DEFAULT_TIME_SERVER3 []  PROGMEM =	"1.pool.ntp.org";
 #define DEFAULT_PRIMARY_SD  1
 #define DEFAULT_SECONDARY_SD 2
 #define DEFAULT_DIRECT_SD_CHECK 0
+#define DEFAULT_SD_CHECK_UPDATE_AT_BOOT 1
+
 
 #define DEFAULT_IS_DIRECT_SD 0
+
 
 
 
@@ -304,9 +353,10 @@ const uint16_t Setting[][2] = {
     {EP_IS_DIRECT_SD, LEVEL_USER},//37
     {EP_PRIMARY_SD, LEVEL_USER},//38
     {EP_SECONDARY_SD, LEVEL_USER},//39
-    {EP_DIRECT_SD_CHECK, LEVEL_USER} //40
+    {EP_DIRECT_SD_CHECK, LEVEL_USER}, //40
+    {EP_SD_CHECK_UPDATE_AT_BOOT, LEVEL_USER} //41
 };
-#define AUTH_ENTRY_NB 41
+#define AUTH_ENTRY_NB 42
 //values
 #define DEFAULT_MAX_REFRESH			120
 #define DEFAULT_MIN_REFRESH			0
@@ -371,7 +421,7 @@ public:
     static bool isLocalPasswordValid(const char * password);
     static bool isIPValid(const char * IP);
     static char * intTostr(int value);
-    static String formatBytes(size_t bytes);
+    static String formatBytes(uint32_t bytes);
     static char * mac2str(uint8_t mac [WL_MAC_ADDR_LENGTH]);
     static byte split_ip (const char * ptr,byte * part);
     static void esp_restart();

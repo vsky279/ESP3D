@@ -1,5 +1,5 @@
 /*
-  wifi.cpp - ESP3D configuration class
+  wificonf.cpp - ESP3D configuration class
 
   Copyright (c) 2014 Luc Lebosse. All rights reserved.
 
@@ -17,31 +17,52 @@
   License along with this library; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
-
-#include "wifi.h"
 #include "config.h"
+#include "wificonf.h"
 #include "bridge.h"
 #include "webinterface.h"
+
+#ifdef ARDUINO_ARCH_ESP8266
 #include "ESP8266WiFi.h"
-#include "IPAddress.h"
 #ifdef MDNS_FEATURE
 #include <ESP8266mDNS.h>
 #endif
+#else
+#include <WiFi.h>
+#include "esp_wifi.h"
+#ifdef MDNS_FEATURE
+#include <ESPmDNS.h>
+#endif
+#endif
+#include "IPAddress.h"
 #ifdef CAPTIVE_PORTAL_FEATURE
 #include <DNSServer.h>
 DNSServer dnsServer;
 const byte DNS_PORT = 53;
 #endif
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266WebServer.h>
+#else
+#include <WebServer.h>
+#endif
 #ifdef SSDP_FEATURE
 #include <ESP8266SSDP.h>
 #endif
 #ifdef NETBIOS_FEATURE
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266NetBIOS.h>
+#else
+#include <ESPNetBIOS.h>
 #endif
+#endif
+#ifdef ARDUINO_ARCH_ESP8266
 extern "C" {
 #include "user_interface.h"
 }
+#endif
+#ifdef TIMESTAMP_FEATURE
+#include <time.h>
+#endif
 
 WIFI_CONFIG::WIFI_CONFIG()
 {
@@ -65,12 +86,18 @@ int32_t WIFI_CONFIG::getSignal(int32_t RSSI)
 
 const char * WIFI_CONFIG::get_hostname()
 {
-    if (WiFi.hostname().length()==0) {
+	String hname;
+#ifdef ARDUINO_ARCH_ESP8266
+	hname = WiFi.hostname();
+#else
+	hname = WiFi.getHostname();
+#endif
+    if (hname.length()==0) {
         if (!CONFIG::read_string(EP_HOSTNAME, _hostname, MAX_HOSTNAME_LENGTH)) {
             strcpy(_hostname,get_default_hostname());
         }
     } else {
-        strcpy(_hostname,WiFi.hostname().c_str());
+        strcpy(_hostname,hname.c_str());
     }
     return _hostname;
 }
@@ -106,7 +133,7 @@ void  WIFI_CONFIG::Safe_Setup()
     delay(500);
     WiFi.softAPConfig( local_ip,  gateway,  subnet);
     delay(1000);
-    Serial.println(F("M117 Safe mode started"));
+    ESP_SERIAL_OUT.println(F("M117 Safe mode started"));
 }
 
 //Read configuration settings and apply them
@@ -125,7 +152,11 @@ bool WIFI_CONFIG::Setup(bool force_ap)
         LOG("Error read Sleep mode\r\n")
         return false;
     }
+#ifdef ARDUINO_ARCH_ESP8266
     WiFi.setSleepMode ((WiFiSleepType_t)bflag);
+#else 
+    esp_wifi_set_ps((wifi_ps_type_t)bflag);
+#endif
     sleep_mode=bflag;
     if (force_ap) {
         bmode = AP_MODE;
@@ -148,9 +179,9 @@ bool WIFI_CONFIG::Setup(bool force_ap)
         if(!CONFIG::read_string(EP_AP_PASSWORD, pwd, MAX_PASSWORD_LENGTH)) {
             return false;
         }
-        Serial.print(FPSTR(M117_));
-        Serial.print(F("SSID "));
-        Serial.println(sbuf);
+        ESP_SERIAL_OUT.print(FPSTR(M117_));
+        ESP_SERIAL_OUT.print(F("SSID "));
+        ESP_SERIAL_OUT.println(sbuf);
         LOG("SSID ")
         LOG(sbuf)
         LOG("\r\n")
@@ -209,35 +240,66 @@ bool WIFI_CONFIG::Setup(bool force_ap)
         if (!CONFIG::read_byte(EP_AP_PHY_MODE, &bflag )) {
             return false;
         }
+#ifdef ARDUINO_ARCH_ESP32
+		esp_wifi_set_protocol(ESP_IF_WIFI_AP, bflag);
+#else
         WiFi.setPhyMode((WiFiPhyMode_t)bflag);
+#endif
         delay(100);
         LOG("Get current config\r\n")
         //get current config
+#ifdef ARDUINO_ARCH_ESP32
+        wifi_config_t conf;
+        esp_wifi_get_config(ESP_IF_WIFI_AP, &conf);
+#else
         struct softap_config apconfig;
         wifi_softap_get_config(&apconfig);
+#endif
         //set the chanel
         if (!CONFIG::read_byte(EP_CHANNEL, &bflag )) {
             return false;
         }
+#ifdef ARDUINO_ARCH_ESP32
+		conf.ap.channel=bflag;
+#else
         apconfig.channel=bflag;
+#endif
         //set Authentification type
         if (!CONFIG::read_byte(EP_AUTH_TYPE, &bflag )) {
             return false;
         }
+#ifdef ARDUINO_ARCH_ESP32
+		conf.ap.authmode=(wifi_auth_mode_t)bflag;
+#else
         apconfig.authmode=(AUTH_MODE)bflag;
+#endif
         //set the visibility of SSID
         if (!CONFIG::read_byte(EP_SSID_VISIBLE, &bflag )) {
             return false;
         }
+#ifdef ARDUINO_ARCH_ESP32
+		conf.ap.ssid_hidden=!bflag;
+#else
         apconfig.ssid_hidden=!bflag;
+#endif
+        
         //no need to add these settings to configuration just use default ones
+#ifdef ARDUINO_ARCH_ESP32
+		conf.ap.max_connection=DEFAULT_MAX_CONNECTIONS;
+        conf.ap.beacon_interval=DEFAULT_BEACON_INTERVAL;
+        if (esp_wifi_set_config(ESP_IF_WIFI_AP, &conf)!=ESP_OK){
+            ESP_SERIAL_OUT.println(F("M117 Error Wifi AP!"));
+            delay(1000);
+        }
+#else
         apconfig.max_connection=DEFAULT_MAX_CONNECTIONS;
         apconfig.beacon_interval=DEFAULT_BEACON_INTERVAL;
         //apply settings to current and to default
         if (!wifi_softap_set_config(&apconfig) || !wifi_softap_set_config_current(&apconfig)) {
-            Serial.println(F("M117 Error Wifi AP!"));
+            ESP_SERIAL_OUT.println(F("M117 Error Wifi AP!"));
             delay(1000);
         }
+#endif
     } else {
         LOG("Set STA mode\r\n")
         if(!CONFIG::read_string(EP_STA_SSID, sbuf, MAX_SSID_LENGTH)) {
@@ -246,9 +308,9 @@ bool WIFI_CONFIG::Setup(bool force_ap)
         if(!CONFIG::read_string(EP_STA_PASSWORD, pwd, MAX_PASSWORD_LENGTH)) {
             return false;
         }
-        Serial.print(FPSTR(M117_));
-        Serial.print(F("SSID "));
-        Serial.println(sbuf);
+        ESP_SERIAL_OUT.print(FPSTR(M117_));
+        ESP_SERIAL_OUT.print(F("SSID "));
+        ESP_SERIAL_OUT.println(sbuf);
         LOG("SSID ")
         LOG(sbuf)
         LOG("\r\n")
@@ -286,7 +348,11 @@ bool WIFI_CONFIG::Setup(bool force_ap)
         if (!CONFIG::read_byte(EP_STA_PHY_MODE, &bflag )) {
             return false;
         }
+#ifdef ARDUINO_ARCH_ESP32
+		esp_wifi_set_protocol(ESP_IF_WIFI_STA, bflag);
+#else
         WiFi.setPhyMode((WiFiPhyMode_t)bflag);
+#endif
         delay(100);
         byte i=0;
         //try to connect
@@ -295,17 +361,17 @@ bool WIFI_CONFIG::Setup(bool force_ap)
         while (WiFi.status() != WL_CONNECTED && i<40) {
             switch(WiFi.status()) {
             case 1:
-                Serial.print(FPSTR(M117_));
-                Serial.println(F("No SSID found!"));
+                ESP_SERIAL_OUT.print(FPSTR(M117_));
+                ESP_SERIAL_OUT.println(F("No SSID found!"));
                 break;
 
             case 4:
-                Serial.print(FPSTR(M117_));
-                Serial.println(F("No Connection!"));
+                ESP_SERIAL_OUT.print(FPSTR(M117_));
+                ESP_SERIAL_OUT.println(F("No Connection!"));
                 break;
 
             default:
-                Serial.print(FPSTR(M117_));
+                ESP_SERIAL_OUT.print(FPSTR(M117_));
                 if (dot == 0)msg = F("Connecting");
                 dot++;
                 msg.trim();
@@ -313,38 +379,33 @@ bool WIFI_CONFIG::Setup(bool force_ap)
                 //for smoothieware to keep position
                 for (byte i= 0;i< 4-dot; i++)msg +=F(" ");
                 if (dot == 4)dot=0;
-                Serial.println(msg); 
+                ESP_SERIAL_OUT.println(msg); 
                 break;
             }
             delay(500);
             i++;
         }
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.print(FPSTR(M117_));
-            Serial.println(F("Not Connectied!"));
+            ESP_SERIAL_OUT.print(FPSTR(M117_));
+            ESP_SERIAL_OUT.println(F("Not Connectied!"));
             return false;
         }
+#ifdef ARDUINO_ARCH_ESP8266
         WiFi.hostname(hostname);
-    }
-
-
-#ifdef MDNS_FEATURE
-    // Set up mDNS responder:
-    if (!mdns.begin(hostname)) {
-        Serial.print(FPSTR(M117_));
-        Serial.println(F("Error with mDNS!"));
-        delay(1000);
-    }
+#else
+		WiFi.setHostname(hostname);
 #endif
+    }
+
     //Get IP
     if (WiFi.getMode()==WIFI_STA) {
         currentIP=WiFi.localIP();
     } else {
         currentIP=WiFi.softAPIP();
     }
-    Serial.print(FPSTR(M117_));
-    Serial.println(currentIP);
-    Serial.flush();
+    ESP_SERIAL_OUT.print(FPSTR(M117_));
+    ESP_SERIAL_OUT.println(currentIP);
+    ESP_SERIAL_OUT.flush();
     return true;
 }
 
@@ -356,7 +417,7 @@ bool WIFI_CONFIG::Enable_servers()
     const char * headerkeys[] = {"Cookie"} ;
     size_t headerkeyssize = sizeof(headerkeys)/sizeof(char*);
     //ask server to track these headers
-    web_interface->WebServer.collectHeaders(headerkeys, headerkeyssize );
+    web_interface->web_server.collectHeaders(headerkeys, headerkeyssize );
 #ifdef CAPTIVE_PORTAL_FEATURE
     if (WiFi.getMode()!=WIFI_STA ) {
         // if DNSServer is started with "*" for domain name, it will reply with
@@ -365,7 +426,7 @@ bool WIFI_CONFIG::Enable_servers()
         dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
     }
 #endif
-    web_interface->WebServer.begin();
+    web_interface->web_server.begin();
 #ifdef TCP_IP_DATA_FEATURE
     //start TCP/IP interface
     data_server = new WiFiServer (wifi_config.idata_port);
@@ -374,9 +435,23 @@ bool WIFI_CONFIG::Enable_servers()
 #endif
 
 #ifdef MDNS_FEATURE
-    // Check for any mDNS queries and send responses
+    // Set up mDNS responder:
     //useless in AP mode and service consuming 
-    if (WiFi.getMode()!=WIFI_AP )wifi_config.mdns.addService("http", "tcp", wifi_config.iweb_port);
+    if (WiFi.getMode()!=WIFI_AP ){
+		char hostname [MAX_HOSTNAME_LENGTH+1];
+		if (!CONFIG::read_string(EP_HOSTNAME, hostname, MAX_HOSTNAME_LENGTH)) {
+			strcpy(hostname,get_default_hostname());
+		}
+		if (!mdns.begin(hostname)) {
+        ESP_SERIAL_OUT.print(FPSTR(M117_));
+        ESP_SERIAL_OUT.println(F("Error with mDNS!"));
+        delay(1000);
+		} else {
+		// Check for any mDNS queries and send responses
+		delay(100);
+		wifi_config.mdns.addService("http", "tcp", wifi_config.iweb_port);
+		}
+	}
 #endif
 #if defined(SSDP_FEATURE) || defined(NETBIOS_FEATURE)
     String shost;
@@ -422,7 +497,7 @@ bool WIFI_CONFIG::Disable_servers()
     //useless in AP mode and service consuming 
     if (WiFi.getMode()!=WIFI_AP )NBNS.end();
 #endif
-    web_interface->WebServer.stop();
+    web_interface->web_server.stop();
     return true;
 }
 

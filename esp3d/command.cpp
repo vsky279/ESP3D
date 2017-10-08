@@ -17,16 +17,20 @@
   License along with this library; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
-
-#include "command.h"
 #include "config.h"
-#include "wifi.h"
+#include "command.h"
+#include "wificonf.h"
 #include "webinterface.h"
 #ifndef FS_NO_GLOBALS
 #define FS_NO_GLOBALS
 #endif
 #include <FS.h>
-
+#if defined(ARDUINO_ARCH_ESP32)
+#include "SPIFFS.h"
+#define MAX_GPIO 16
+#else
+#define MAX_GPIO 37
+#endif
 String COMMAND::buffer_serial;
 String COMMAND::buffer_tcp;
 
@@ -337,7 +341,7 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
             if (mode == 0) {
                  if (WiFi.getMode() !=WIFI_OFF) {
                      //disable wifi
-                     Serial.println("M117 Disabling Wifi");
+                     ESP_SERIAL_OUT.println("M117 Disabling Wifi");
                      WiFi.mode(WIFI_OFF);
                      wifi_config.Disable_servers();
                      return response;
@@ -345,11 +349,11 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
             }
             else if (mode == 1) { //restart device is the best way to start everything clean
                  if (WiFi.getMode() == WIFI_OFF) {
-                      Serial.println("M117 Enabling Wifi");
+                      ESP_SERIAL_OUT.println("M117 Enabling Wifi");
                       CONFIG::esp_restart();
                  } else BRIDGE::println("M117 Wifi already on", output);
             } else  { //restart wifi and restart is the best way to start everything clean
-                 Serial.println("M117 Enabling Wifi");
+                 ESP_SERIAL_OUT.println("M117 Enabling Wifi");
                  CONFIG::esp_restart();
             }
         }
@@ -418,13 +422,16 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
                             parameter = get_param(cmd_params,"PULLUP=", false);
                             if (parameter == "YES") {
                                 //GPIO16 is different than others
-                                if (pin <16) {
+                                if (pin < MAX_GPIO) {
                                     LOG("Set as input pull up\r\n")
                                     pinMode(pin, INPUT_PULLUP);
-                                } else {
+                                } 
+#ifdef ARDUINO_ARCH_ESP8266
+                                else {
                                     LOG("Set as input pull down 16\r\n")
                                     pinMode(pin, INPUT_PULLDOWN_16);
                                 }
+#endif
                             } else {
                                 LOG("Set as input\r\n")
                                 pinMode(pin, INPUT);
@@ -461,6 +468,7 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
         }
         break;
 #endif
+
     //Save data string
     //[ESP300]<data>pwd=<user/admin password>
     case 300:
@@ -535,8 +543,10 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
             }
             BRIDGE::print(F("\",\"H\":\"Sleep Mode\",\"O\":[{\"None\":\""), output);
             BRIDGE::print((const char *)CONFIG::intTostr(WIFI_NONE_SLEEP), output);
+#ifdef ARDUINO_ARCH_ESP8266
             BRIDGE::print(F("\"},{\"Light\":\""), output);
             BRIDGE::print((const char *)CONFIG::intTostr(WIFI_LIGHT_SLEEP), output);
+#endif
             BRIDGE::print(F("\"},{\"Modem\":\""), output);
             BRIDGE::print((const char *)CONFIG::intTostr(WIFI_MODEM_SLEEP), output);
             BRIDGE::print(F("\"}]}"), output);
@@ -1060,7 +1070,7 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
                     if (pos == EP_IS_DIRECT_SD){
                         CONFIG::InitDirectSD();
                         if (CONFIG::is_direct_sd) CONFIG::InitPins();
-                    }
+                        }
                     }
                 }
             if (styp == "I") {
@@ -1146,10 +1156,10 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
         {
             if (parameter=="RESET") {
                 CONFIG::reset_config();
-                BRIDGE::println(F("Reset done - restart neded"), output);
+                BRIDGE::println(F("Reset done - restart needed"), output);
             } else if (parameter=="SAFEMODE") {
                 wifi_config.Safe_Setup();
-                 BRIDGE::println(F("Set Safe Mode  - restart neded"), output);
+                 BRIDGE::println(F("Set Safe Mode  - restart needed"), output);
             } else  if (parameter=="RESTART") {
                  BRIDGE::println(F("Restart started"), output);
                  BRIDGE::flush( output);
@@ -1203,10 +1213,10 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
         if ((cmd_params.length() > 0) && (cmd_params[0] != '/')) {
             cmd_params = "/" + cmd_params;
         }
-         fs::File currentfile = SPIFFS.open(cmd_params, "r");
+        FS_FILE currentfile = SPIFFS.open(cmd_params, SPIFFS_FILE_READ);
         if (currentfile) {//if file open success
             //flush to be sure send buffer is empty
-            Serial.flush();
+            ESP_SERIAL_OUT.flush();
             //read content
             String currentline = currentfile.readString();
             //until no line in file
@@ -1231,10 +1241,10 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
                     }
                 } else {
                     //send line to serial
-                    Serial.println(currentline);
+                    ESP_SERIAL_OUT.println(currentline);
                     //flush to be sure send buffer is empty
                     delay(0);
-                    Serial.flush();
+                    ESP_SERIAL_OUT.flush();
                 }
                 currentline="";
                 //read next line if any
@@ -1249,6 +1259,48 @@ bool COMMAND::execute_command(int cmd,String cmd_params, tpipe output, level_aut
 
         break;
     }
+    //Format SPIFFS
+    //[ESP710]FORMAT pwd=<admin password>
+    case 710: 
+		parameter = get_param(cmd_params,"", true);
+#ifdef AUTHENTICATION_FEATURE
+        if (auth_type != LEVEL_ADMIN) {
+            BRIDGE::println(INCORRECT_CMD_MSG, output);
+            response = false;
+        } else
+#endif 
+		{
+		if (parameter=="FORMAT") {
+			 BRIDGE::print(F("Formating"), output);
+			 //SPIFFS.end();
+			 delay(0);
+			 SPIFFS.format();
+			 //SPIFFS.begin();
+			 BRIDGE::println(F("...Done"), output);
+            } else {
+			BRIDGE::println(INCORRECT_CMD_MSG, output);
+			response = false;
+            }
+        }
+        break;
+     //SPIFFS total size and used size
+    //[ESP720]<header answer>
+    case 720: 
+		BRIDGE::print(cmd_params, output);
+#ifdef ARDUINO_ARCH_ESP8266   
+		fs::FSInfo info;
+		SPIFFS.info(info);
+		BRIDGE::print("SPIFFS Total:", output);
+		BRIDGE::print(CONFIG::formatBytes(info.totalBytes).c_str(), output);
+		BRIDGE::print(" Used:", output);
+		BRIDGE::println(CONFIG::formatBytes(info.usedBytes).c_str(), output);
+#else
+		BRIDGE::print("SPIFFS  Total:", output);
+		BRIDGE::print(CONFIG::formatBytes(SPIFFS.totalBytes()).c_str(), output);
+		BRIDGE::print(" Used:", output);
+		BRIDGE::println(CONFIG::formatBytes(SPIFFS.usedBytes()).c_str(), output);
+#endif
+        break;
     //get fw version firmare target and fw version
     //[ESP800]<header answer>
     case 800:
