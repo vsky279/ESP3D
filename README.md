@@ -10,7 +10,7 @@ Please use ESP8266 with at least 1M flash to get Web Update working
 
 <u>Stable version:</u>    
 <u>Development version:</u>    
-Arduino ide 1.8.4 with git from ESP8266 : [![build status](https://travis-ci.org/luc-github/ESP3D.svg?branch=devt)](https://travis-ci.org/luc-github/ESP3D)
+Arduino ide 1.8.4 with git from ESP8266 and git from ESP32 : [![build status](https://travis-ci.org/luc-github/ESP3D.svg?branch=devt)](https://travis-ci.org/luc-github/ESP3D)
 
 [All releases](https://github.com/luc-github/ESP3D/wiki)
 
