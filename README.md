@@ -117,7 +117,7 @@ On ESP8266 for better performance select CPU Frequency to be 160MHz instead of d
 * To get silent boot connect GPIO 15 to GND or select default output as Serial2 instead of Serial in config.h
 `#define ESP_SERIAL_OUT Serial2`
 
-*Currently NETBIOS and SSDP libraries are not available on ESP32 and are automaticaly disabled.
+* Currently NETBIOS and SSDP libraries are not available on ESP32 and are automaticaly disabled.
 
 ## After flash
 UI is present in data directory and must be flashed on SPIFFS also but latest version can found at https://github.com/luc-github/ESP3D-WEBUI   
