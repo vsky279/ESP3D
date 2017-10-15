@@ -1721,7 +1721,7 @@ void CONFIG::print_config(tpipe output, bool plaintext)
 		}
 #else
             //go next record
-            station = station->next;
+            station =STAILQ_NEXT(station,	next);
         }
         wifi_softap_free_station_info();
 #endif
