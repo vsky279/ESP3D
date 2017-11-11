@@ -24,6 +24,7 @@ before_script:
   - echo 'build.flash_ld=eagle.flash.4m.ld' >> platform.txt
   - echo 'build.flash_freq=40' >> platform.txt
   - echo 'build.flash_size=4M' >> platform.txt
+  - echo 'build.flash_mode=dio' >> platform.txt
   - echo 'build.f_cpu=160000000L' >> platform.txt
   - sed -i "s/generic.build.f_cpu=80000000L/generic.build.f_cpu=160000000L/g" ./boards.txt
   - cd $HOME/arduino_ide/hardware
