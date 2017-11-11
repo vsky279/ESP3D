@@ -34,7 +34,6 @@ before_script:
   - python get.py
   - cd ..
   - echo 'build.flash_freq=40m' >> platform.txt
-  - mv pt.txt platform.txt
   - mv $TRAVIS_BUILD_DIR/libraries/WebServer $HOME/arduino_ide/hardware/esp32/esp32/libraries/
   - mv $TRAVIS_BUILD_DIR/libraries/DNSServer $HOME/arduino_ide/hardware/esp32/esp32/libraries/
   
