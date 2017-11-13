@@ -1,4 +1,4 @@
-# ESP3D
+# ESP3D - now merged to master - please use master branch instead   
 Firmware used with 3D printer  for :   
 ESP8266/ESP8285 using [arduino core version](https://github.com/esp8266/Arduino)   
 ESP32 using [arduino core version](https://github.com/espressif/arduino-esp32)   
