@@ -277,7 +277,8 @@ const byte DEFAULT_AP_IP_MODE = 				STATIC_IP_MODE;
 const byte DEFAULT_IP_VALUE[]   =	        {192, 168, 0, 1};
 const byte DEFAULT_MASK_VALUE[]  =	        {255, 255, 255, 0};
 #define DEFAULT_GATEWAY_VALUE   	        DEFAULT_IP_VALUE
-const long DEFAULT_BAUD_RATE =			115200;
+//const long DEFAULT_BAUD_RATE =			115200;
+const long DEFAULT_BAUD_RATE =			460800;
 const char M117_[] PROGMEM =		"M117 ";
 #define DEFAULT_PHY_MODE			WIFI_PHY_MODE_11G
 #define DEFAULT_SLEEP_MODE			WIFI_MODEM_SLEEP
